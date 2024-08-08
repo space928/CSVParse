@@ -12,13 +12,24 @@
 	  <Title>CSV Parse</Title>
 	  <Version>1.0.1</Version>
 	  <Authors>Thomas Mathieson</Authors>
-	  <Description>A lightning-fast CSV parser.</Description>
+	  <Description>An ultra-fast CSV parser.</Description>
 	  <Copyright>Copyright Thomas Mathieson 2024</Copyright>
 	  <PackageLicenseExpression>MIT</PackageLicenseExpression>
 	  <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
 	  <IncludeSymbols>True</IncludeSymbols>
 	  <SymbolPackageFormat>snupkg</SymbolPackageFormat>
 	  <Platforms>AnyCPU;x64</Platforms>
+	  <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
+	  <PackageProjectUrl>https://github.com/space928/CSVParse</PackageProjectUrl>
+	  <PackageReadmeFile>README.md</PackageReadmeFile>
+	  <RepositoryUrl>https://github.com/space928/CSVParse</RepositoryUrl>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
 
 </Project>
