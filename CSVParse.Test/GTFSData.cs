@@ -1,7 +1,4 @@
-﻿using CsvHelper;
-using CsvHelper.Configuration;
-using CsvHelper.TypeConversion;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -12,37 +9,20 @@ namespace CSVParse.Benchmarks;
 public record GTFSStopTime
 {
     [CSVName("trip_id")]
-#if CSVHelper
-    [CsvHelper.Configuration.Attributes.Name("trip_id")]
-#endif
     public string? TripID { get; init; }
     [CSVCustomSerializer<TransitTimeCSVSerializer>]
     [CSVName("arrival_time")]
-#if CSVHelper
-    [CsvHelper.Configuration.Attributes.Name("arrival_time")]
-    [CsvHelper.Configuration.Attributes.TypeConverter(typeof(TransitTimeCSVConverter))]
-#endif
     public TransitTime ArrivalTime { get; init; }
     [CSVCustomSerializer<TransitTimeCSVSerializer>]
     [CSVName("departure_time")]
-#if CSVHelper
-    [CsvHelper.Configuration.Attributes.Name("departure_time")]
-    [CsvHelper.Configuration.Attributes.TypeConverter(typeof(TransitTimeCSVConverter))]
-#endif
     public TransitTime DepartureTime { get; init; }
     [CSVName("stop_id")]
-#if CSVHelper
-    [CsvHelper.Configuration.Attributes.Name("stop_id")]
-#endif
     public string? StopID { get; init; }
     //public int stop_sequence { get; init; }
     //public string stop_headsign { get; init; }
     //public GTFSPickupDropOffPattern? pickup_type { get; init; }
     //public GTFSPickupDropOffPattern? drop_off_type { get; init; }
     [CSVName("shape_dist_traveled")]
-#if CSVHelper
-    [CsvHelper.Configuration.Attributes.Name("shape_dist_traveled")]
-#endif
     public float? ShapeDistTraveled { get; init; }
     //public GTFSTimepoint timepoint { get; init; }
     //public GTFSPickupDropOffPattern? continuous_pickup { get; init; }
@@ -148,24 +128,7 @@ public class TransitTimeCSVSerializer : ICustomCSVSerializer
     }
 }
 
-#if CSVHelper
-public class TransitTimeCSVConverter : ITypeConverter
-{
-    public object? ConvertFromString(string? text, IReaderRow row, MemberMapData memberMapData)
-    {
-        return new TransitTime(text);
-    }
-
-    public string? ConvertToString(object? value, IWriterRow row, MemberMapData memberMapData)
-    {
-        if (value is TransitTime time)
-            return time.ToString();
-        return null;
-    }
-}
-#endif
-
-public readonly struct TransitTime : ICSVSerializable
+public readonly struct TransitTime
 {
     public readonly int time;
 

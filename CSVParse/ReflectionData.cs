@@ -28,6 +28,8 @@ internal struct ReflectionData<T> where T : new()
     internal delegate void DeserializeValue(ref T target, ReadOnlySpan<char> value);
     internal delegate int SerializeValue(ref T target, Span<char> dst);
 
+    internal delegate int SerializeFunc(Span<char> dst);
+
     private delegate void SetValueGeneric<U>(ref T target, U value);
     private delegate U GetValueGeneric<U>(ref T target);
     private delegate void Format<U>(U val, Span<char> dst, out int written);
@@ -372,6 +374,7 @@ internal struct ReflectionData<T> where T : new()
         if (UseILGeneration)
         {
             DynamicMethod setter = new($"set_{fi.Name}_{fi.GetHashCode()}", null, [typeof(T).MakeByRefType(), typeof(U)], typeof(T)!, true);
+            
             var il = setter.GetILGenerator();
             il.Emit(OpCodes.Ldarg_0);
             if (!typeof(T).IsValueType)
@@ -383,6 +386,7 @@ internal struct ReflectionData<T> where T : new()
             //il.Emit(OpCodes.Ldflda);
             il.Emit(OpCodes.Stfld, fi);
             il.Emit(OpCodes.Ret);
+
             return setter.CreateDelegate<SetValueGeneric<U>>();
         }
         else
@@ -391,6 +395,72 @@ internal struct ReflectionData<T> where T : new()
             {
                 var tref = __makeref(target);
                 fi.SetValueDirect(tref, value!);
+            };
+        }
+    }
+
+    private static DeserializeValue MakeConstructorDeserializer(PropertyInfo pi, ConstructorInfo ctor)
+    {
+        if (UseILGeneration)
+        {
+            var setter = pi.GetSetMethod() ?? throw new CSVSerializerException($"Property '{pi.Name}' of type {pi.PropertyType.Name} is not supported!");
+            DynamicMethod dynSetter = new($"set_{pi.Name}_{pi.GetHashCode()}", null, [typeof(T).MakeByRefType(), typeof(ReadOnlySpan<char>)], typeof(T), true);
+
+            var il = dynSetter.GetILGenerator();
+
+            il.Emit(OpCodes.Ldarg_0);
+            if (!typeof(T).IsValueType)
+                il.Emit(OpCodes.Ldind_Ref);
+            il.Emit(OpCodes.Ldarg_1);
+            il.Emit(OpCodes.Newobj, ctor);
+            if (typeof(T).IsValueType)
+                il.Emit(OpCodes.Call, setter);
+            else
+                il.Emit(OpCodes.Callvirt, setter);
+            il.Emit(OpCodes.Ret);
+            return dynSetter.CreateDelegate<DeserializeValue>();
+        }
+        else
+        {
+            // WARNING: This code path is super slow! 
+            return (ref T target, ReadOnlySpan<char> str) =>
+            {
+                if (target != null)
+                {
+                    object box = target;
+                    pi.SetValue(target, ctor.Invoke([new string(str)]));
+                    target = (T)box; // Booo, unboxing...
+                }
+            };
+        }
+    }
+
+    private static DeserializeValue MakeConstructorDeserializer(FieldInfo fi, ConstructorInfo ctor)
+    {
+        if (UseILGeneration)
+        {
+            DynamicMethod setter = new($"set_{fi.Name}_{fi.GetHashCode()}", null, [typeof(T).MakeByRefType(), typeof(ReadOnlySpan<char>)], typeof(T)!, true);
+
+            var il = setter.GetILGenerator();
+
+            il.Emit(OpCodes.Ldarg_0);
+            if (!typeof(T).IsValueType)
+                il.Emit(OpCodes.Ldind_Ref);
+            il.Emit(OpCodes.Ldarg_1);
+            il.Emit(OpCodes.Newobj, ctor);
+            //il.Emit(OpCodes.Ldflda);
+            il.Emit(OpCodes.Stfld, fi);
+            il.Emit(OpCodes.Ret);
+
+            return setter.CreateDelegate<DeserializeValue>();
+        }
+        else
+        {
+            // WARNING: This code path is super slow! 
+            return (ref T target, ReadOnlySpan<char> str) =>
+            {
+                var tref = __makeref(target);
+                fi.SetValueDirect(tref, ctor.Invoke([new string(str)])!);
             };
         }
     }
@@ -478,6 +548,16 @@ internal struct ReflectionData<T> where T : new()
         {
             var setterResolved = MakeSetter<string>(prop);
             return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, new(str));
+        } 
+        else if (simpleType == typeof(PreAllocatedString))
+        {
+            var getterResolved = MakeGetter<PreAllocatedString>(prop);
+            return (ref T t, ReadOnlySpan<char> str) => getterResolved(ref t).Update(str);
+        }
+        else if (simpleType.GetConstructor([typeof(ReadOnlySpan<char>)]) is ConstructorInfo ctor)
+        {
+            // TODO: Should also support ISpanParsable
+            return MakeConstructorDeserializer(prop, ctor);
         }
         else
             throw new CSVSerializerException($"Property '{prop.Name}' of type {prop.PropertyType.Name} is not supported!");
@@ -567,6 +647,15 @@ internal struct ReflectionData<T> where T : new()
             var setter = MakeSetter<string>(field);
             return (ref T t, ReadOnlySpan<char> str) => setter(ref t, new(str));
         }
+        else if (simpleType == typeof(PreAllocatedString))
+        {
+            var getterResolved = MakeGetter<PreAllocatedString>(field);
+            return (ref T t, ReadOnlySpan<char> str) => getterResolved(ref t).Update(str);
+        }
+        else if (simpleType.GetConstructor([typeof(ReadOnlySpan<char>)]) is ConstructorInfo ctor)
+        {
+            return MakeConstructorDeserializer(field, ctor);
+        }
         else
             throw new CSVSerializerException($"Field '{field.Name}' of type {field.FieldType.Name} is not supported!");
 
@@ -645,6 +734,22 @@ internal struct ReflectionData<T> where T : new()
         else if (simpleType == typeof(string))
         {
             return MakeSerializerInternal(field, (string val, Span<char> dst, out int written) => { bool wrote = val.TryCopyTo(dst); written = wrote ? val.Length : 0; });
+        }
+        else if (simpleType == typeof(PreAllocatedString))
+        {
+            return MakeSerializerInternal(field, (PreAllocatedString val, Span<char> dst, out int written) => { bool wrote = val.Span.TryCopyTo(dst); written = wrote ? val.Length : 0; });
+        }
+        else if (simpleType.GetMethod("Serialize", [typeof(Span<char>)]) is MethodInfo serializer && serializer.ReturnType == typeof(int))
+        {
+            // TODO should also support ISpanFormatable
+            //throw new NotImplementedException();
+            //var f = serializer.CreateDelegate<SerializeFunc>();
+            // TODO: Implement IL generation for fast path...
+            return (ref T t, Span<char> dst) =>
+            {
+                var f = serializer.CreateDelegate<SerializeFunc>(t);
+                return f(dst);
+            };
         }
         else
             throw new CSVSerializerException($"Field '{field.Name}' of type {field.FieldType.Name} is not supported!");
@@ -729,6 +834,21 @@ internal struct ReflectionData<T> where T : new()
         else if (simpleType == typeof(string))
         {
             return MakeSerializerInternal(field, (string val, Span<char> dst, out int written) => { bool wrote = val.TryCopyTo(dst); written = wrote ? val.Length : 0; });
+        }
+        else if (simpleType == typeof(PreAllocatedString))
+        {
+            return MakeSerializerInternal(field, (PreAllocatedString val, Span<char> dst, out int written) => { bool wrote = val.Span.TryCopyTo(dst); written = wrote ? val.Length : 0; });
+        }
+        else if (simpleType.GetMethod("Serialize", [typeof(Span<char>)]) is MethodInfo serializer && serializer.ReturnType == typeof(int))
+        {
+            //throw new NotImplementedException();
+            //var f = serializer.CreateDelegate<SerializeFunc>();
+            // TODO: Implement IL generation for fast path...
+            return (ref T t, Span<char> dst) =>
+            {
+                var f = serializer.CreateDelegate<SerializeFunc>(t);
+                return f(dst);
+            };
         }
         else
             throw new CSVSerializerException($"Property '{field.Name}' of type {field.PropertyType.Name} is not supported!");

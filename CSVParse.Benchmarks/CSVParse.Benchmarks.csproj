@@ -4,13 +4,16 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+	  <Nullable>enable</Nullable>
+    <Platforms>AnyCPU</Platforms>
+	  <DefineConstants>CSVHelper</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="BenchmarkDotNet" Version="0.13.12" />
     <PackageReference Include="BenchmarkDotNet.Annotations" Version="0.13.12" />
     <PackageReference Include="BenchmarkDotNet.Diagnostics.Windows" Version="0.13.12" />
+    <PackageReference Include="CsvHelper" Version="33.0.1" />
   </ItemGroup>
 
   <ItemGroup>

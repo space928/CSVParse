@@ -5,13 +5,19 @@ VisualStudioVersion = 17.10.34916.146
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CSVParse", "CSVParse\CSVParse.csproj", "{E1964C83-E8FD-4127-9805-91DC4C4A146C}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CSVParse.Benchmarks", "CSVParse.Benchmarks\CSVParse.Benchmarks.csproj", "{ADCB4A56-7778-45B5-BF8C-642C020AFC02}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CSVParse.Benchmarks", "CSVParse.Benchmarks\CSVParse.Benchmarks.csproj", "{ADCB4A56-7778-45B5-BF8C-642C020AFC02}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CSVParse.Test", "CSVParse.Test\CSVParse.Test.csproj", "{4D33B5F9-264C-490B-9305-3E598D592270}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CSVParse.Test", "CSVParse.Test\CSVParse.Test.csproj", "{4D33B5F9-264C-490B-9305-3E598D592270}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LineReadingTests", "LineReadingTests\LineReadingTests.csproj", "{4A7F1F98-12C0-4641-A999-294EC68249BC}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LineReadingTests", "LineReadingTests\LineReadingTests.csproj", "{4A7F1F98-12C0-4641-A999-294EC68249BC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ConsoleApp1", "ConsoleApp1\ConsoleApp1.csproj", "{C615EF6A-5DC8-4722-81AA-822DD99D0F83}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F3E97F43-2332-4F34-80AB-F432A3C444C7}"
+	ProjectSection(SolutionItems) = preProject
+		.gitattributes = .gitattributes
+		.gitignore = .gitignore
+		LICENSE.txt = LICENSE.txt
+		README.md = README.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -35,10 +41,6 @@ Global
 		{4A7F1F98-12C0-4641-A999-294EC68249BC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4A7F1F98-12C0-4641-A999-294EC68249BC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4A7F1F98-12C0-4641-A999-294EC68249BC}.Release|Any CPU.Build.0 = Release|Any CPU
-		{C615EF6A-5DC8-4722-81AA-822DD99D0F83}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{C615EF6A-5DC8-4722-81AA-822DD99D0F83}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{C615EF6A-5DC8-4722-81AA-822DD99D0F83}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{C615EF6A-5DC8-4722-81AA-822DD99D0F83}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

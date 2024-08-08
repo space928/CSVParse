@@ -484,9 +484,9 @@ public class CSVParserOld<[DynamicallyAccessedMembers(DynamicallyAccessedMemberT
         }
         else // c == '\r'
         {
-            if (len + 1 < buff.Length)
+            if (len < buff.Length)
             {
-                char c1 = buff[len + 1];
+                char c1 = buff[len];
                 if (c1 == '\n')
                 {
                     lineEnding = LineEnding.WindowsCRLF;

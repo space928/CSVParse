@@ -1,71 +1,42 @@
-﻿using System;
+using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Reflection.Metadata;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace CSVParse;
 
-public static class CSVParser
+public static class CSVParserOld
 {
-    /// <summary>
-    /// Parses a CSV file into an IEnumerable of rows.
-    /// </summary>
-    /// <typeparam name="T">The row data structure to deserialize into.</typeparam>
-    /// <param name="stream">The binary stream to read from.</param>
-    /// <param name="options">The CSV parser options.</param>
-    /// <param name="leaveOpen">Whether the stream should be left open after parsing has finished.</param>
-    /// <returns>An enumerable of rows, parsed as they are iterated through.</returns>
-    public static IEnumerable<T> Parse<T>(Stream stream, CSVSerializerOptions? options = null, bool leaveOpen = true) where T : new()
+    public static IEnumerable<T> Parse<T>(Stream stream, CSVHeaderMode parseHeader = CSVHeaderMode.Parse, bool leaveOpen = true, Encoding? encoding = null) where T : new()
     {
-        return new CSVParser<T>(options).Parse(stream, leaveOpen);
+        return new CSVParserOld<T>().Parse(stream, parseHeader, leaveOpen, encoding);
     }
 }
 
-public class CSVSerializerOptions
+/*public class CSVSerializerOptions
 {
     public bool IncludeFields { get; init; } = false;
     public bool IncludeProperties { get; init; } = true;
-    public bool IncludePrivate { get; init; } = false;
-    public bool HandleSpeechMarks { get; init; } = false;
+    public bool IncludePrivate {  get; init; } = false;
+    public bool HandleSpeechMarks {  get; init; } = false;
     public char Separator { get; init; } = ',';
-    public int MaximumLineSize { get; init; } = 2048;
-    public CSVHeaderMode HeaderMode { get; init; } = CSVHeaderMode.Parse;
-    public Encoding? DefaultEncoding { get; init; } = null;
 
-    public static readonly CSVSerializerOptions Default = new();
-
-    public CSVSerializerOptions() { }
-
-    public CSVSerializerOptions(CSVSerializerOptions other)
-    {
-        IncludeFields = other.IncludeFields;
-        IncludeProperties = other.IncludeProperties;
-        IncludePrivate = other.IncludePrivate;
-        HandleSpeechMarks = other.HandleSpeechMarks;
-        Separator = other.Separator;
-        MaximumLineSize = other.MaximumLineSize;
-        HeaderMode = other.HeaderMode;
-        DefaultEncoding = other.DefaultEncoding;
-    }
-}
+    public static readonly CSVSerializerOptions Default = new ();
+}*/
 
 [RequiresUnreferencedCode("")]
-public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields
+public class CSVParserOld<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields
         | DynamicallyAccessedMemberTypes.NonPublicFields
         | DynamicallyAccessedMemberTypes.PublicProperties
         | DynamicallyAccessedMemberTypes.NonPublicProperties)] T> where T : new()
 {
     private readonly byte[] byteBuffer;
     private readonly char[] line;
-    private readonly char[] lineUnescaped;
-    private readonly ReflectionData<T>?[] typeInfo;
+    private readonly ReflectionData?[] typeInfo;
     private readonly CSVSerializerOptions options;
     private char[] charBuffer;
     private Encoding encoding;
@@ -77,16 +48,11 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
     private const int defaultReadSize = 4096;
     //private const int defaultReadSize = 10;
 
-    /// <summary>
-    /// Constructs a new CSV Parser with the given options.
-    /// </summary>
-    /// <param name="options">The options to initialise this parser instance with.</param>
-    public CSVParser(CSVSerializerOptions? options = null)
+    public CSVParserOld(CSVSerializerOptions? options = null)
     {
-        this.options = options ?? CSVSerializerOptions.Default;
         byteBuffer = new byte[defaultReadSize];
-        line = new char[this.options.MaximumLineSize];
-        lineUnescaped = new char[this.options.MaximumLineSize];
+        line = new char[defaultReadSize/2];
+        this.options = options ?? CSVSerializerOptions.Default;
         Init();
         typeInfo = BuildReflectionCache();
     }
@@ -100,31 +66,20 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
         detectedEncoding = encoding != null;
         decoder = this.encoding.GetDecoder();
 
-        position = 0;
-        charBuffLength = 0;
-
         charBuffer = new char[this.encoding.GetMaxCharCount(byteBuffer.Length)];
     }
 
-    /// <summary>
-    /// Parses a CSV file into an IEnumerable of rows.
-    /// </summary>
-    /// <typeparam name="T">The row data structure to deserialize into.</typeparam>
-    /// <param name="stream">The binary stream to read from.</param>
-    /// <param name="leaveOpen">Whether the stream should be left open after parsing has finished.</param>
-    /// <returns>An enumerable of rows, parsed as they are iterated through.</returns>
-    public IEnumerable<T> Parse(Stream stream, bool leaveOpen = true)
+    public IEnumerable<T> Parse(Stream stream, CSVHeaderMode parseHeader = CSVHeaderMode.Parse, bool leaveOpen = true, Encoding? encoding = null)
     {
         try
         {
-            Init(options.DefaultEncoding);
+            Init(encoding);
 
             //Span<char> line = stackalloc char[2048];
             var fields = typeInfo;
             int lineNo = 0;
             char sep = options.Separator;
             bool handleSpeechMarks = options.HandleSpeechMarks;
-            var parseHeader = options.HeaderMode;
             if (parseHeader == CSVHeaderMode.Parse)
             {
                 int headerLen = ReadLine(stream, line);
@@ -132,7 +87,7 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
                     yield break;
                 fields = ReadHeader(line.AsSpan()[..headerLen]);
                 lineNo++;
-            }
+            } 
             else if (parseHeader == CSVHeaderMode.Skip)
             {
                 ReadLine(stream, line);
@@ -144,12 +99,10 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
             {
                 if (len == 0)
                     continue;
-                T ret = new T();
-                ReadRow(ref ret, line.AsSpan()[..len], lineUnescaped, sep, handleSpeechMarks, fields, lineNo);
-                yield return ret;
+                yield return ReadRow(line.AsSpan()[..len], sep, handleSpeechMarks, fields, lineNo);
                 lineNo++;
             }
-        }
+        } 
         finally
         {
             if (!leaveOpen)
@@ -157,77 +110,19 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
         }
     }
 
-    /// <summary>
-    /// Resets the internal state of the parser, and if enabled, reads the header row of given CSV stream.
-    /// </summary>
-    /// <param name="stream">A binary stream containing the CSV file to be parsed.</param>
-    /// <returns>A data structure storing the contents and metadata from the header row.</returns>
-    public HeaderData<T> Initialise(Stream stream)
-    {
-        Init(options.DefaultEncoding);
-
-        var fields = typeInfo;
-        int lineNo = 0;
-        char sep = options.Separator;
-        bool handleSpeechMarks = options.HandleSpeechMarks;
-        var parseHeader = options.HeaderMode;
-        if (parseHeader == CSVHeaderMode.Parse)
-        {
-            int headerLen = ReadLine(stream, line);
-            if (headerLen != 0)
-            {
-                fields = ReadHeader(line.AsSpan()[..headerLen]);
-            }
-            lineNo++;
-        }
-        else if (parseHeader == CSVHeaderMode.Skip)
-        {
-            ReadLine(stream, line);
-            lineNo++;
-        }
-
-        return new HeaderData<T>(fields, sep, handleSpeechMarks, lineNo);
-    }
-
-    /// <summary>
-    /// Reads and parses a single row from the CSV file.
-    /// </summary>
-    /// <param name="headerData">The header data returned by the last call to the <see cref="Initialise(Stream)"/> method.</param>
-    /// <param name="stream">A binary stream containing the CSV file to be parsed.</param>
-    /// <param name="result">The object to populate with the data from the parsed CSV row.</param>
-    /// <returns><c>true</c> if there are more rows to read, otherwise <c>false</c></returns>
-    public bool ParseRow(ref HeaderData<T> headerData, Stream stream, ref T result)
-    {
-        int len;
-        while ((len = ReadLine(stream, line)) != -1)
-        {
-            if (len == 0)
-                continue;
-
-            ReadRow(ref result, line.AsSpan()[..len], lineUnescaped, headerData.sep, headerData.handleSpeechMarks, headerData.typeInfo, headerData.lineNo);
-            headerData.lineNo++;
-
-            return true;
-        }
-
-        return false;
-    }
-
     [RequiresUnreferencedCode("Parsing CSV file using reflection.")]
-    private ReflectionData<T>?[] BuildReflectionCache()
+    private ReflectionData?[] BuildReflectionCache()
     {
-        List<ReflectionData<T>?> reflection = [];
+        List<ReflectionData?> reflection = [];
+        int addedIndex = 0;
         bool needsSorting = false;
 
-        int addedIndex = 0;
         if (options.IncludeFields)
         {
             var fields = typeof(T).GetFields(BindingFlags.Instance | BindingFlags.Public | (options.IncludePrivate ? BindingFlags.NonPublic : BindingFlags.Default));
             foreach (var field in fields)
             {
-                var refl = ReflectionData<T>.Create(field, addedIndex++);
-                if (refl != null)
-                    reflection.Add(refl);
+                AddMember(field, field.FieldType, field.SetValue, field.GetValue);
             }
         }
         if (options.IncludeProperties)
@@ -235,16 +130,14 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
             var fields = typeof(T).GetProperties(BindingFlags.Instance | BindingFlags.Public | (options.IncludePrivate ? BindingFlags.NonPublic : BindingFlags.Default));
             foreach (var field in fields)
             {
-                var refl = ReflectionData<T>.Create(field, addedIndex++);
-                if (refl != null)
-                    reflection.Add(refl);
+                AddMember(field, field.PropertyType, field.SetValue, field.GetValue);
             }
         }
 
-        if (true || needsSorting)
+        if (needsSorting)
         {
             var sorted = reflection.OrderBy(x => x!.Value.index);
-            List<ReflectionData<T>?> expanded = [];
+            List<ReflectionData?> expanded = [];
             int lastInd = -1;
             foreach (var field in sorted)
             {
@@ -258,29 +151,86 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
             reflection = expanded;
         }
 
-        return [.. reflection];
+        return [..reflection];
+
+        void AddMember(MemberInfo field, Type ftype, ReflectionData.SetValue setValue, ReflectionData.GetValue getValue)
+        {
+            bool skip = false;
+            string? csvName = null;
+            int index = -1;
+            ICustomCSVSerializer? customSerializer = null;
+            foreach (var attr in field.GetCustomAttributes())
+            {
+                switch (attr)
+                {
+                    case CSVSkipAttribute:
+                        skip = true;
+                        break;
+                    case CSVNameAttribute name:
+                        csvName = name.Name;
+                        break;
+                    //case CSVCustomSerializerAttribute<ICustomCSVSerializer> serializer:
+                    //    customSerializer = Activator.CreateInstance(serializer.GetType().GenericTypeArguments[0]) as ICustomCSVSerializer;
+                    //    break;
+                    case CSVIndexAttribute indexAttr:
+                        index = indexAttr.Index;
+                        needsSorting = true;
+                        break;
+                    default:
+                        var typ = attr.GetType();
+                        if (typ.IsGenericType && typ.GetGenericTypeDefinition() == typeof(CSVCustomSerializerAttribute<>))
+                        {
+                            customSerializer = Activator.CreateInstance(typ.GenericTypeArguments[0]) as ICustomCSVSerializer;
+                        }
+                        break;
+                }
+                if (skip)
+                    break;
+            }
+            if (skip)
+                return;
+
+            bool nullable = false;
+            if (Nullable.GetUnderlyingType(ftype) is Type t)
+            {
+                nullable = true;
+                ftype = t;
+            }
+
+            reflection.Add(new()
+            {
+                fieldName = field.Name,
+                csvName = csvName,
+                index = index == -1 ? addedIndex++ : index,
+                customDeserializer = customSerializer,
+                setValueFunc = setValue,
+                getValueFunc = getValue,
+                isNullable = nullable,
+                fieldType = ftype,
+            });
+        }
     }
 
-    private ReflectionData<T>?[] ReadHeader(ReadOnlySpan<char> header)
+    private ReflectionData?[] ReadHeader(ReadOnlySpan<char> header)
     {
-        List<ReflectionData<T>?> res = [];
+        List<ReflectionData?> res = [];
         int start = 0;
         char sep = options.Separator;
         while (true)
         {
-            if (start >= header.Length)
+            if (start >= header.Length) 
                 break;
 
             var col = header[start..];
             int end = col.IndexOf(sep);
-            if (end == -1)
+            if (end == -1) 
                 break;
 
             col = col[..end];
             bool found = false;
             for (int i = 0; i < typeInfo.Length; i++)
             {
-                if (typeInfo[i] is ReflectionData<T> t)
+                if (typeInfo[i] is ReflectionData t)
                 {
                     var name = t.csvName ?? t.fieldName;
                     if (col.SequenceEqual(name))
@@ -300,125 +250,116 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
         return [.. res];
     }
 
-    private static void ReadRow(ref T result, ReadOnlySpan<char> line, char[] lineUnescaped, char sep, bool handleSpeechMarks, ReflectionData<T>?[] fields, int lineNo)
+    private static T ReadRow(ReadOnlySpan<char> line, char sep, bool handleSpeechMarks, ReflectionData?[] fields, int lineNo)
     {
-        //T ret = new T();
-        /*object retBox = ret;
-        if (typeof(T).IsValueType)
-            Unsafe.Unbox<T>(retBox);*/
+        object ret = new T();
 
-        int start = 0;
-        int ind = 0;
-        while (true)
+        if (handleSpeechMarks)
         {
-            if (start >= line.Length || ind > fields.Length)
-                break;
 
-            var item = line[start..];
-            int end = -1;
-
-            if (handleSpeechMarks && item.Length > 0 && item[0] == '"')
+        } 
+        else
+        {
+            int start = 0;
+            int ind = 0;
+            while (true)
             {
-                int unescLen = 0;
-                Span<char> unesc = lineUnescaped.AsSpan();
-                item = item[1..];
-                // Find more quotation marks
-                int pos;
-                while ((pos = item.IndexOf('"')) != -1)
-                {
-                    if (pos + 1 < item.Length)
-                    {
-                        char next = item[pos + 1];
-                        if (next == '"')
-                        {
-                            // Copy from the start of the line to the quote
-                            item[..(pos + 1)].CopyTo(unesc[unescLen..]);
-                            unescLen += pos + 1;
-                            end += pos + 2;
+                if (start >= line.Length || ind > fields.Length)
+                    break;
 
-                            // Trim the start of the line till after both quotes
-                            item = item[(pos + 2)..];
-                        }
-                        else if (next == sep || next == '\r' || next == '\n') // TODO: Remove the line ending test from here once the line reader bugs have been ironed out...
-                        {
-                            //Cpy
-                            item[..pos].CopyTo(unesc[unescLen..]);
-                            unescLen += pos;
-                            end += pos + 2;
-                            break;
-                        }
-                        else
-                            throw new CSVSerializerException($"");
-                    }
-                    else
-                    {
-                        //Cpy
-                        item[..pos].CopyTo(unesc[unescLen..]);
-                        unescLen += pos;
-                        end += unescLen;
-                    }
-                }
-
-                item = unesc[..unescLen];
-                end++;
-            }
-            else
-            {
-                end = item.IndexOf(sep);
+                var item = line[start..];
+                int end = item.IndexOf(sep);
                 if (end == -1)
                     break;
+
                 item = item[..end];
-            }
-
-            if (ind >= fields.Length)
-                throw new CSVSerializerException($"Row at line {lineNo} has too many fields! Expected {fields.Length}.");
-
-            var field = fields[ind];
-            if (field is ReflectionData<T> f)
-            {
-                //object? val = null;
-                if (f.customDeserializer != null)
+                var field = fields[ind];
+                if (field is ReflectionData f)
                 {
-                    object? val = f.customDeserializer.Deserialize(item, lineNo);
-                    f.setValueFunc(ref result, val);
-                }
-                else
-                {
-                    if (f.isNullable)
-                    {
-                        if (item.Length == 0)
-                            f.setValueFunc(ref result, null);
-                        else
-                            try
-                            {
-                                f.deserializeValueFunc(ref result, item);
-                                //val = DeserializeBasicItem(item, f.fieldType, lineNo, f.fieldName);
-                            }
-                            catch (CSVSerializerException) { }
-                            catch (FormatException) { }
-                            catch (OverflowException) { }
-                    }
+                    object? val = null;
+                    if (f.customDeserializer != null)
+                        val = f.customDeserializer.Deserialize(item, lineNo);
                     else
                     {
-                        try
+                        if (f.isNullable)
                         {
-                            f.deserializeValueFunc(ref result, item);
-                        }
-                        catch (Exception ex) when (ex is FormatException or OverflowException)
+                            if (item.Length == 0)
+                                val = null;
+                            else
+                                try
+                                {
+                                    val = DeserializeBasicItem(item, f.fieldType, lineNo, f.fieldName);
+                                }
+                                catch (CSVSerializerException) { }
+                        } 
+                        else
                         {
-                            throw new CSVSerializerException($"Value of '{line}' couldn't be parsed as a {f.fieldType.Name} {f.fieldName}! At line number {lineNo + 1}.", ex);
+                            val = DeserializeBasicItem(item, f.fieldType, lineNo, f.fieldName);
                         }
                     }
+                    f.setValueFunc(ret, val);
+                    //f.field?.SetValue(ret, val);
                 }
 
-                //f.field?.SetValue(ret, val);
+                start += end + 1;
+                ind++;
             }
-
-            start += end + 1;
-            ind++;
         }
 
-        //return ret;
+        return (T)ret;
+    }
+
+    private static object? DeserializeBasicItem(ReadOnlySpan<char> line, Type type, int lineNo, string fieldName)
+    {
+        var simpleType = type;
+        if (type.IsEnum)
+            simpleType = type.GetEnumUnderlyingType();
+        object value;
+
+        try
+        {
+            if (simpleType == typeof(bool))
+                value = int.Parse(line) != 0;
+            else if (simpleType == typeof(byte))
+                value = byte.Parse(line);
+            else if (simpleType == typeof(sbyte))
+                value = sbyte.Parse(line);
+            else if (simpleType == typeof(char))
+                value = line[0];//char.Parse(line);
+            else if (simpleType == typeof(decimal))
+                value = decimal.Parse(line);
+            else if (simpleType == typeof(double))
+                value = double.Parse(line);
+            else if (simpleType == typeof(float))
+                value = float.Parse(line);
+            else if (simpleType == typeof(int))
+                value = int.Parse(line);
+            else if (simpleType == typeof(uint))
+                value = uint.Parse(line);
+            else if (simpleType == typeof(nint))
+                value = nint.Parse(line);
+            else if (simpleType == typeof(long))
+                value = long.Parse(line);
+            else if (simpleType == typeof(ulong))
+                value = ulong.Parse(line);
+            else if (simpleType == typeof(short))
+                value = short.Parse(line);
+            else if (simpleType == typeof(ushort))
+                value = ushort.Parse(line);
+            else if (simpleType == typeof(string))
+                value = line.ToString();
+            else
+                throw new CSVSerializerException($"Field '{fieldName}' of type {type.Name} are not supported! At line number {lineNo+1}.");
+        }
+        catch (Exception ex) when (ex is FormatException or OverflowException)
+        {
+            throw new CSVSerializerException($"Value of '{line}' couldn't be parsed as a {type.Name} {fieldName}! At line number {lineNo+1}.", ex);
+        }
+
+        if (type.IsEnum)
+            value = Enum.ToObject(type, value);
+
+        return value;
     }
 
     private enum LineEnding
@@ -442,7 +383,6 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
         if (dst.Length == 0)
             throw new ArgumentException("Attempted to read line into a 0-length span!");
 #endif
-        // TODO: since dst is always an array, we could support arbitrary line lengths by growing our line buffer as needed.
 
         //var buff = charBuffer.AsMemory()[position..];
         var buffSpan = charBuffer.AsSpan()[position..charBuffLength];
@@ -646,19 +586,27 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
         detectedEncoding = true;
         return preamble;
     }
+
+    private struct ReflectionData
+    {
+        public string fieldName;
+        public string? csvName;
+        public int index;
+        public SetValue setValueFunc;
+        public GetValue getValueFunc;
+        public Type fieldType;
+        public bool isNullable;
+        public ICustomCSVSerializer? customDeserializer;
+
+        internal delegate void SetValue(object? target, object? value);
+        internal delegate object? GetValue(object? target);
+    }
 }
 
-public interface ICustomCSVSerializer
+/*public interface ICustomCSVSerializer
 {
     public object? Deserialize(ReadOnlySpan<char> data, int lineNumber);
     public ReadOnlySpan<char> Serialize(object? data, int lineNumber) => data?.ToString();
-}
-
-public interface ICSVSerializable
-{
-    //public abstract ICSVSerializable(ReadOnlySpan<char> data);
-
-    public int Serialize(Span<char> dst);
 }
 
 public enum CSVHeaderMode
@@ -709,4 +657,4 @@ public sealed class CSVCustomSerializerAttribute<[DynamicallyAccessedMembers(Dyn
 /// Marks a field as skipped while parsing the CSV file.
 /// </summary>
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, Inherited = false, AllowMultiple = false)]
-public sealed class CSVSkipAttribute() : Attribute { }
+public sealed class CSVSkipAttribute() : Attribute { }*/

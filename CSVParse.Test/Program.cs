@@ -3,6 +3,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Diagnostics;
+using CSVParse.Benchmarks;
 
 namespace CSVParse.Test;
 
@@ -12,17 +13,25 @@ internal class Program
     {
         //Console.ReadLine();
         Console.WriteLine("Testing...");
+        string path = @"C:\Users\Thoma\Downloads\stop_times.txt";
+        string pathq = @"C:\Users\Thoma\Downloads\stop_times_q.txt";
+
+        if (!File.Exists(path))
+        {
+            TestDataGenerator.GenerateTestData(path, 20_000_000, false);
+            TestDataGenerator.GenerateTestData(pathq, 20_000_000, true);
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+        }
+
         //TestCSVParse<Test>();
         //TestCSVParser();
-        TestLargeFile();
+        TestLargeFile(path, pathq);
         Console.WriteLine("DONE!");
         Console.ReadLine();
     }
 
-    private static void TestLargeFile()
+    private static void TestLargeFile(string path, string pathq)
     {
-        string path = @"D:\Thoma\Downloads\stop_times.txt";
-
         var options = new CSVSerializerOptions()
         {
             IncludeFields = true,
@@ -31,11 +40,62 @@ internal class Program
             HandleSpeechMarks = false,
             Separator = ','
         };
+        var options2 = new CSVSerializerOptions(options)
+        {
+            HandleSpeechMarks = true
+        };
         var parser = new CSVParser<GTFSStopTimeStruct>(options);
+        var parserNoCusSer = new CSVParser<GTFSStopTimeStructNoCustomSer>(options);
+        var parserNoAlloc = new CSVParser<GTFSStopTimeStructFast>(options);
+        var parserNoAllocQuote = new CSVParser<GTFSStopTimeStructFast>(options2);
         var parserOld = new CSVParserOld<GTFSStopTimeStruct>(options);
 
-        int rowsToParse = 500000;
+        int rowsToParse = 1_000_0000;
 
+#if false
+        {
+            Stopwatch sw = new();
+            sw.Start();
+            //using var ms = new MemoryStream(File.ReadAllBytes(path));
+            using FileStream fs = File.OpenRead(path);
+
+            var header = parserNoCusSer.Initialise(fs);
+            var csv = new GTFSStopTimeStructNoCustomSer[rowsToParse];
+            for (int i = 0; i < csv.Length; i++)
+                parserNoCusSer.ParseRow(ref header, fs, ref csv[i]);
+            sw.Stop();
+            Console.WriteLine($"New! Loaded {csv.Length} records in {sw.Elapsed}!");
+        }
+
+        {
+            Stopwatch sw = new();
+            sw.Start();
+            //using var ms = new MemoryStream(File.ReadAllBytes(path));
+            using FileStream fs = File.OpenRead(path);
+
+            var header = parserNoAlloc.Initialise(fs);
+            var csv = new GTFSStopTimeStructFast(1024);
+            for (int i = 0; i < rowsToParse; i++)
+                parserNoAlloc.ParseRow(ref header, fs, ref csv);
+            sw.Stop();
+            Console.WriteLine($"New (No alloc)! Loaded {rowsToParse} records in {sw.Elapsed}!");
+        }
+
+        {
+            Stopwatch sw = new();
+            sw.Start();
+            //using var ms = new MemoryStream(File.ReadAllBytes(path));
+            using FileStream fs = File.OpenRead(pathq);
+
+            var header = parserNoAllocQuote.Initialise(fs);
+            var csv = new GTFSStopTimeStructFast(1024);
+            for (int i = 0; i < rowsToParse; i++)
+                parserNoAllocQuote.ParseRow(ref header, fs, ref csv);
+            sw.Stop();
+            Console.WriteLine($"New (No alloc quote)! Loaded {rowsToParse} records in {sw.Elapsed}!");
+        }
+
+#else
         // Warmup
         {
             using FileStream fs = File.OpenRead(path);
@@ -43,16 +103,26 @@ internal class Program
             fs.Position = 0;
             var csv1 = parserOld.Parse(fs).Take(rowsToParse).ToList();
             Console.WriteLine($"Warmup! Loaded {csv.Count} and {csv1.Count} records!");
+
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+            GC.WaitForPendingFinalizers();
         }
 
         {
             Stopwatch sw = new();
             sw.Start();
-            using FileStream fs = File.OpenRead(path);
-            var csv = parser.Parse(fs).Take(rowsToParse).ToList();
+            //using var ms = new MemoryStream(File.ReadAllBytes(path));
+            using FileStream fs = File.OpenRead(pathq);
+
+            var header = parserNoAllocQuote.Initialise(fs);
+            var csv = new GTFSStopTimeStructFast(1024);
+            for (int i = 0; i < rowsToParse; i++)
+                parserNoAllocQuote.ParseRow(ref header, fs, ref csv);
             sw.Stop();
-            Console.WriteLine($"New! Loaded {csv.Count} records in {sw.Elapsed}!");
+            Console.WriteLine($"New (No alloc quote)! Loaded {rowsToParse} records in {sw.Elapsed}!");
         }
+
+        Thread.Sleep(1500);
 
         {
             Stopwatch sw = new();
@@ -62,86 +132,7 @@ internal class Program
             sw.Stop();
             Console.WriteLine($"Old! Loaded {csv.Count} records in {sw.Elapsed}!");
         }
-    }
-
-    public record GTFSStopTime
-    {
-        [CSVName("trip_id")]
-        public string? TripID { get; init; }
-        [CSVCustomSerializer<TransitTimeCSVSerializer>]
-        [CSVName("arrival_time")]
-        public TransitTime ArrivalTime { get; init; }
-        [CSVCustomSerializer<TransitTimeCSVSerializer>]
-        [CSVName("departure_time")]
-        public TransitTime DepartureTime { get; init; }
-        [CSVName("stop_id")]
-        public string? StopID { get; init; }
-        //public int stop_sequence { get; init; }
-        //public string stop_headsign { get; init; }
-        //public GTFSPickupDropOffPattern? pickup_type { get; init; }
-        //public GTFSPickupDropOffPattern? drop_off_type { get; init; }
-        [CSVName("shape_dist_traveled")]
-        public float? ShapeDistTraveled { get; init; }
-        //public GTFSTimepoint timepoint { get; init; }
-        //public GTFSPickupDropOffPattern? continuous_pickup { get; init; }
-        //public GTFSPickupDropOffPattern? continuous_drop_off { get; init; }
-    }
-
-    public readonly struct GTFSStopTimeStruct
-    {
-        [CSVName("trip_id")]
-        [CSVIndex(0)]
-        public readonly string TripID;
-        [CSVCustomSerializer<TransitTimeCSVSerializer>]
-        [CSVName("arrival_time")]
-        [CSVIndex(1)]
-        public readonly TransitTime ArrivalTime;
-        [CSVCustomSerializer<TransitTimeCSVSerializer>]
-        [CSVName("departure_time")]
-        [CSVIndex(2)]
-        public readonly TransitTime DepartureTime;
-        [CSVName("stop_id")]
-        [CSVIndex(3)]
-        public readonly string StopID;
-        //public int stop_sequence { get; init; }
-        //public string stop_headsign { get; init; }
-        //public GTFSPickupDropOffPattern? pickup_type { get; init; }
-        //public GTFSPickupDropOffPattern? drop_off_type { get; init; }
-        [CSVName("shape_dist_traveled")]
-        [CSVIndex(8)]
-        public readonly float? ShapeDistTraveled;
-        //public GTFSTimepoint timepoint { get; init; }
-        //public GTFSPickupDropOffPattern? continuous_pickup { get; init; }
-        //public GTFSPickupDropOffPattern? continuous_drop_off { get; init; }
-    }
-
-    public class TransitTimeCSVSerializer : ICustomCSVSerializer
-    {
-        public object? Deserialize(ReadOnlySpan<char> data, int lineNumber)
-        {
-            return new TransitTime(data);
-        }
-    }
-
-    public readonly struct TransitTime
-    {
-        public readonly int time;
-
-        public TransitTime(ReadOnlySpan<char> s)
-        {
-            int hour = int.Parse(s[..2]);
-            int min = int.Parse(s[3..5]);
-            int second = int.Parse(s[6..8]);
-            time = hour * 3600 + min * 60 + second;
-        }
-
-        public override string ToString()
-        {
-            var h = (time / 3600); // = 25
-            var m = (time / 60 - (h * 60)); // = 30
-            var s = time % 60;
-            return $"{h:D2}:{m:D2}:{s:D2}";
-        }
+#endif
     }
 
     private static void TestCSVParse<T>() where T : new()
@@ -273,7 +264,7 @@ integer,str,enm,a,b,c
     {
         var parser = new CSVParser<TestRow>(new CSVSerializerOptions() { IncludeFields = true });
         using MemoryStream ms = new(Encoding.UTF8.GetBytes(csv));
-        var res = parser.Parse(ms, CSVHeaderMode.Parse).ToList();
+        var res = parser.Parse(ms).ToList();
         foreach (var row in res)
             Console.WriteLine(row.integer);
         Console.WriteLine("DONE");

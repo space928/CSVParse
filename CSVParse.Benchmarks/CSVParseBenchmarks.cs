@@ -3,28 +3,32 @@ using BenchmarkDotNet.Diagnosers;
 using BenchmarkDotNet.Engines;
 using BenchmarkDotNet.Jobs;
 using CommandLine;
+using CsvHelper;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace CSVParse.Benchmarks;
 
-[SimpleJob(RuntimeMoniker.Net80, launchCount: -1, warmupCount: 4, iterationCount: 10)]
+[SimpleJob(RuntimeMoniker.Net80, launchCount: -1, warmupCount: 4, iterationCount: 20)]
 [MemoryDiagnoser]
 //[DryJob(RuntimeMoniker.Net80)]//RuntimeMoniker.Net80)]
 //[DisassemblyDiagnoser(printSource:true, exportHtml:true, maxDepth:20)]
-[HardwareCounters(HardwareCounter.BranchInstructions, HardwareCounter.BranchMispredictions, HardwareCounter.LlcMisses)]
+//[HardwareCounters(HardwareCounter.BranchInstructions, HardwareCounter.BranchMispredictions, HardwareCounter.LlcMisses)]
 //[BenchmarkDotNet.Attributes.]
 public class CSVParseBenchmarks
 {
-    public string Path { get; set; } = @"D:\Thoma\Downloads\stop_times.txt";
+    public string Path { get; set; } = @"C:\Users\Thoma\Downloads\stop_times.txt";//@"D:\Thoma\Downloads\stop_times.txt";
     public int RowsToParse { get; set; } = 50_000;
 
     private MemoryStream? memoryStream;
     private readonly CSVParser<GTFSStopTime> parserClass;
     private readonly CSVParser<GTFSStopTimeStruct> parserStruct;
+    private readonly CSVParser<GTFSStopTimeStructNoCustomSer> parserStructNoCustomSer;
+    private readonly CSVParser<GTFSStopTimeStructFast> parserStructNoAlloc;
     private readonly CSVParserOld<GTFSStopTime> parserOldClass;
     private readonly CSVParserOld<GTFSStopTimeStruct> parserOldStruct;
 
@@ -41,8 +45,11 @@ public class CSVParseBenchmarks
 
         parserClass = new(options);
         parserStruct = new(options);
+        parserStructNoCustomSer = new(options);
+        parserStructNoAlloc = new(options);
         parserOldClass = new(options);
         parserOldStruct = new(options);
+        //parserCsvHelper = new();
     }
 
     [GlobalSetup]
@@ -79,7 +86,59 @@ public class CSVParseBenchmarks
         //Console.WriteLine($"Loaded {csv.Count} records!");
     }
 
-    //[Benchmark]
+    [Benchmark]
+    public void TestCSVParseStructNoIt()
+    {
+        if (memoryStream == null)
+            return;
+        memoryStream.Position = 0;
+        
+        var header = parserStruct.Initialise(memoryStream);
+        var csv = new GTFSStopTimeStruct[RowsToParse];
+        for (int i = 0; i < csv.Length; i++)
+            parserStruct.ParseRow(ref header, memoryStream, ref csv[i]);
+
+        //Console.WriteLine($"Loaded {csv.Count} records!");
+    }
+
+    [Benchmark]
+    public void TestCSVParseStructNoItNoCustomSer()
+    {
+        if (memoryStream == null)
+            return;
+        memoryStream.Position = 0;
+
+        var header = parserStructNoCustomSer.Initialise(memoryStream);
+        var csv = new GTFSStopTimeStructNoCustomSer[RowsToParse];
+        for (int i = 0; i < csv.Length; i++)
+            parserStructNoCustomSer.ParseRow(ref header, memoryStream, ref csv[i]);
+
+        //Console.WriteLine($"Loaded {csv.Count} records!");
+    }
+
+    [Benchmark]
+    public void TestCSVParseStructNoItNoAlloc()
+    {
+        if (memoryStream == null)
+            return;
+        memoryStream.Position = 0;
+
+        var header = parserStructNoAlloc.Initialise(memoryStream);
+        var csv = new GTFSStopTimeStructFast(1024);
+        //int tmp = 0;
+        for (int i = 0; i < RowsToParse; i++)
+        {
+            parserStructNoAlloc.ParseRow(ref header, memoryStream, ref csv);
+            /*unchecked
+            {
+                tmp += csv.DepartureTime.time;
+            }*/
+        }
+
+        //Console.WriteLine($"Loaded {csv.Count} records!");
+    }
+
+    [Benchmark]
     public void TestCSVParseOldClass()
     {
         if (memoryStream == null)
@@ -98,6 +157,21 @@ public class CSVParseBenchmarks
         memoryStream.Position = 0;
 
         var csv = parserOldStruct.Parse(memoryStream).Take(RowsToParse).ToList();
+        //Console.WriteLine($"Loaded {csv.Count} records!");
+    }
+
+    [Benchmark]
+    public void TestCSVHelper()
+    {
+        if (memoryStream == null)
+            return;
+        memoryStream.Position = 0;
+
+        using var reader = new StreamReader(memoryStream, leaveOpen: true);
+        using var csv = new CsvReader(reader, CultureInfo.InvariantCulture, true);
+        var records = csv.GetRecords<GTFSStopTime>().Take(RowsToParse).ToList();
+
+        //var csv = parserOldClass.Parse(memoryStream).Take(RowsToParse).ToList();
         //Console.WriteLine($"Loaded {csv.Count} records!");
     }
 }

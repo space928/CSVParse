@@ -18,6 +18,7 @@
 	  <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
 	  <IncludeSymbols>True</IncludeSymbols>
 	  <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+	  <Platforms>AnyCPU;x64</Platforms>
   </PropertyGroup>
 
 </Project>
