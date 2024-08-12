@@ -331,6 +331,7 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
                         char next = item[pos + 1];
                         if (next == '"')
                         {
+                            // Unescape "
                             // Copy from the start of the line to the quote
                             item[..(pos + 1)].CopyTo(unesc[unescLen..]);
                             unescLen += pos + 1;
@@ -341,6 +342,7 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
                         }
                         else if (next == sep || next == '\r' || next == '\n') // TODO: Remove the line ending test from here once the line reader bugs have been ironed out...
                         {
+                            // Reached end of field
                             //Cpy
                             item[..pos].CopyTo(unesc[unescLen..]);
                             unescLen += pos;
@@ -352,6 +354,7 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
                     }
                     else
                     {
+                        // Reached end of line
                         //Cpy
                         item[..pos].CopyTo(unesc[unescLen..]);
                         unescLen += pos;
@@ -365,13 +368,14 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
             else
             {
                 end = item.IndexOf(sep);
-                if (end == -1)
-                    break;
-                item = item[..end];
+                //if (end == -1)
+                //    break;
+                if (end != -1)
+                    item = item[..end];
             }
 
             if (ind >= fields.Length)
-                throw new CSVSerializerException($"Row at line {lineNo} has too many fields! Expected {fields.Length}.");
+                throw new CSVSerializerException($"Row at line {lineNo + 1} has too many fields! Expected {fields.Length}.");
 
             var field = fields[ind];
             if (field is ReflectionData<T> f)
@@ -427,6 +431,18 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
         UnixCR,
         MacLF,
         WindowsCRLF
+    }
+
+    /// <summary>
+    /// Gets the position in bytes in the given of this CSV Parser, taking into account the internal state of the parser.
+    /// </summary>
+    /// <param name="stream">The stream that was last read from.</param>
+    /// <returns>The position in bytes in the stream after the last row was read.</returns>
+    public long GetPosition(Stream stream)
+    {
+        var buffSpan = charBuffer.AsSpan()[position..charBuffLength];
+        int charBuffBytesLeft = encoding.GetByteCount(buffSpan);
+        return stream.Position - charBuffBytesLeft;
     }
 
     /// <summary>

@@ -2,6 +2,7 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 
 namespace CSVParse;
 
@@ -477,7 +478,7 @@ internal struct ReflectionData<T> where T : new()
         if (simpleType == typeof(bool))
         {
             var setterResolved = MakeSetter<bool>(prop);
-            return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, str.SequenceEqual("true"));
+            return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, (str.Length == 1 && str[0] == '1') || str.SequenceEqual("true"));
         }
         else if (simpleType == typeof(byte))
         {
@@ -575,7 +576,7 @@ internal struct ReflectionData<T> where T : new()
         if (simpleType == typeof(bool))
         {
             var setter = MakeSetter<bool>(field);
-            return (ref T t, ReadOnlySpan<char> str) => setter(ref t, str.SequenceEqual("true"));
+            return (ref T t, ReadOnlySpan<char> str) => setter(ref t, (str.Length == 1 && str[0] == '1') || str.SequenceEqual("true"));
         }
         else if (simpleType == typeof(byte))
         {
@@ -666,6 +667,32 @@ internal struct ReflectionData<T> where T : new()
         }*/
     }
 
+    private static void FormatBool(bool val, Span<char> dst, out int written)
+    {
+        if (val)
+        {
+            if (dst.Length >= 4)
+            {
+                "true".CopyTo(dst);
+                written = 4;
+                return;// true;
+            }
+            written = 0;
+            return;// false;
+        }
+        else
+        {
+            if (dst.Length >= 5)
+            {
+                "false".CopyTo(dst);
+                written = 5;
+                return;// true;
+            }
+            written = 0;
+            return;// false;
+        }
+    }
+
     private static SerializeValue MakeSerializer(FieldInfo field)
     {
         var type = field.FieldType;
@@ -677,7 +704,7 @@ internal struct ReflectionData<T> where T : new()
 
         if (simpleType == typeof(bool))
         {
-            return MakeSerializerInternal(field, (bool val, Span<char> dst, out int written) => val.TryFormat(dst, out written));
+            return MakeSerializerInternal(field, (bool val, Span<char> dst, out int written) => FormatBool(val, dst, out written));//val.TryFormat(dst, out written));
         }
         else if (simpleType == typeof(byte))
         {
@@ -777,7 +804,7 @@ internal struct ReflectionData<T> where T : new()
 
         if (simpleType == typeof(bool))
         {
-            return MakeSerializerInternal(field, (bool val, Span<char> dst, out int written) => val.TryFormat(dst, out written));
+            return MakeSerializerInternal(field, (bool val, Span<char> dst, out int written) => FormatBool(val, dst, out written));
         }
         else if (simpleType == typeof(byte))
         {
