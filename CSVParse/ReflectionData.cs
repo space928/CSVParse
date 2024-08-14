@@ -2,7 +2,6 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
 
 namespace CSVParse;
 
@@ -10,7 +9,7 @@ namespace CSVParse;
 /// Provides an efficient representation of the fields and properties of a data structure and provides efficient 
 /// methods for getting and setting their values.
 /// </summary>
-/// <typeparam name="T">The </typeparam>
+/// <typeparam name="T">The type of data structure to collect metadata for.</typeparam>
 internal struct ReflectionData<T> where T : new()
 {
     public string fieldName;

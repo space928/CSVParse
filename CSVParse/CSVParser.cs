@@ -12,6 +12,9 @@ using System.Threading.Tasks;
 
 namespace CSVParse;
 
+/// <summary>
+/// Provides static methods to parse/write CSV files.
+/// </summary>
 public static class CSVParser
 {
     /// <summary>
@@ -28,15 +31,42 @@ public static class CSVParser
     }
 }
 
+/// <summary>
+/// Defines the options used by the CSV parser.
+/// </summary>
 public class CSVSerializerOptions
 {
+    /// <summary>
+    /// Whether the target class/struct's fields should be treated as CSV fields.
+    /// </summary>
     public bool IncludeFields { get; init; } = false;
+    /// <summary>
+    /// Whether the target class/struct's properties should be treated as CSV fields.
+    /// </summary>
     public bool IncludeProperties { get; init; } = true;
+    /// <summary>
+    /// Whether the target class/struct's private members should be treated as CSV fields.
+    /// </summary>
     public bool IncludePrivate { get; init; } = false;
+    /// <summary>
+    /// Whether the parser should parse and unescape quotation marks if encountered in the CSV file.
+    /// </summary>
     public bool HandleSpeechMarks { get; init; } = false;
+    /// <summary>
+    /// The separator character between fields in the CSV.
+    /// </summary>
     public char Separator { get; init; } = ',';
+    /// <summary>
+    /// The absolute maximum length of a line in the CSV file. If lines exceed this length, the behaviour is undefined.
+    /// </summary>
     public int MaximumLineSize { get; init; } = 2048;
+    /// <summary>
+    /// The CSV parser's behaviour when reading a CSV header row.
+    /// </summary>
     public CSVHeaderMode HeaderMode { get; init; } = CSVHeaderMode.Parse;
+    /// <summary>
+    /// The default text encoding to use when decoding the file. If left as <c>null</c>, this will be detected automatically.
+    /// </summary>
     public Encoding? DefaultEncoding { get; init; } = null;
 
     public static readonly CSVSerializerOptions Default = new();
@@ -56,6 +86,10 @@ public class CSVSerializerOptions
     }
 }
 
+/// <summary>
+/// Parses CSV files into C# data structures.
+/// </summary>
+/// <typeparam name="T">The type of the data structure representing a single row of the CSV.</typeparam>
 [RequiresUnreferencedCode("")]
 public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicFields
         | DynamicallyAccessedMemberTypes.NonPublicFields
@@ -273,10 +307,11 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
 
             var col = header[start..];
             int end = col.IndexOf(sep);
-            if (end == -1)
-                break;
+            //if (end == -1)
+            //    break;
 
-            col = col[..end];
+            if (end != -1)
+                col = col[..end];
             bool found = false;
             for (int i = 0; i < typeInfo.Length; i++)
             {
@@ -293,6 +328,9 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
             }
             if (!found)
                 res.Add(null);
+
+            if (end == -1)
+                break;
 
             start += end + 1;
         }
@@ -350,7 +388,8 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
                             break;
                         }
                         else
-                            throw new CSVSerializerException($"");
+                            throw new CSVSerializerException($"Illegal quotation mark found in CSV file, quotation marks can only appear at the start or end of fields. " +
+                                $"At line number {lineNo + 1} line: \n{line}");
                     }
                     else
                     {
@@ -374,48 +413,50 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
                     item = item[..end];
             }
 
-            if (ind >= fields.Length)
-                throw new CSVSerializerException($"Row at line {lineNo + 1} has too many fields! Expected {fields.Length}.");
-
-            var field = fields[ind];
-            if (field is ReflectionData<T> f)
+            if (ind < fields.Length)
             {
-                //object? val = null;
-                if (f.customDeserializer != null)
+                //throw new CSVSerializerException($"Row at line {lineNo + 1} has too many fields! Expected {fields.Length}. Line: \n{line}");
+
+                var field = fields[ind];
+                if (field is ReflectionData<T> f)
                 {
-                    object? val = f.customDeserializer.Deserialize(item, lineNo);
-                    f.setValueFunc(ref result, val);
-                }
-                else
-                {
-                    if (f.isNullable)
+                    //object? val = null;
+                    if (f.customDeserializer != null)
                     {
-                        if (item.Length == 0)
-                            f.setValueFunc(ref result, null);
-                        else
-                            try
-                            {
-                                f.deserializeValueFunc(ref result, item);
-                                //val = DeserializeBasicItem(item, f.fieldType, lineNo, f.fieldName);
-                            }
-                            catch (CSVSerializerException) { }
-                            catch (FormatException) { }
-                            catch (OverflowException) { }
+                        object? val = f.customDeserializer.Deserialize(item, lineNo);
+                        f.setValueFunc(ref result, val);
                     }
                     else
                     {
-                        try
+                        if (f.isNullable)
                         {
-                            f.deserializeValueFunc(ref result, item);
+                            if (item.Length == 0)
+                                f.setValueFunc(ref result, null);
+                            else
+                                try
+                                {
+                                    f.deserializeValueFunc(ref result, item);
+                                    //val = DeserializeBasicItem(item, f.fieldType, lineNo, f.fieldName);
+                                }
+                                catch (CSVSerializerException) { }
+                                catch (FormatException) { }
+                                catch (OverflowException) { }
                         }
-                        catch (Exception ex) when (ex is FormatException or OverflowException)
+                        else
                         {
-                            throw new CSVSerializerException($"Value of '{line}' couldn't be parsed as a {f.fieldType.Name} {f.fieldName}! At line number {lineNo + 1}.", ex);
+                            try
+                            {
+                                f.deserializeValueFunc(ref result, item);
+                            }
+                            catch (Exception ex) when (ex is FormatException or OverflowException)
+                            {
+                                throw new CSVSerializerException($"Value of '{line}' couldn't be parsed as a {f.fieldType.Name} {f.fieldName}! At line number {lineNo + 1}.", ex);
+                            }
                         }
                     }
-                }
 
-                //f.field?.SetValue(ret, val);
+                    //f.field?.SetValue(ret, val);
+                }
             }
 
             start += end + 1;
@@ -664,12 +705,19 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
     }
 }
 
+/// <summary>
+/// Implements the methods needed to serialize/deserialize a given type as a CSV field.
+/// </summary>
 public interface ICustomCSVSerializer
 {
     public object? Deserialize(ReadOnlySpan<char> data, int lineNumber);
     public ReadOnlySpan<char> Serialize(object? data, int lineNumber) => data?.ToString();
 }
 
+/// <summary>
+/// Supports serialization and deserialization by the CSV parser. Note that implementors must also provide a constructor 
+/// which takes a single <see cref="ReadOnlySpan{char}"/> of <see cref="char"/> as a parameter.
+/// </summary>
 public interface ICSVSerializable
 {
     //public abstract ICSVSerializable(ReadOnlySpan<char> data);
@@ -677,13 +725,28 @@ public interface ICSVSerializable
     public int Serialize(Span<char> dst);
 }
 
+/// <summary>
+/// The CSV parser's behaviour when reading a CSV header row.
+/// </summary>
 public enum CSVHeaderMode
 {
+    /// <summary>
+    /// The file does not contain a header row.
+    /// </summary>
     None,
+    /// <summary>
+    /// The file contains a header row which should be parsed to associate the columns with the fields/properties of the target data structure.
+    /// </summary>
     Parse,
+    /// <summary>
+    /// The file contains a header row which should be ignored.
+    /// </summary>
     Skip
 }
 
+/// <summary>
+/// Represents an exception that occurred while parsing a CSV file.
+/// </summary>
 public class CSVSerializerException : Exception
 {
     public CSVSerializerException() : base() { }

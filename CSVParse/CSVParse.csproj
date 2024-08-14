@@ -10,7 +10,7 @@
 	  <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
 	  <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 	  <Title>CSV Parse</Title>
-	  <Version>1.1.2</Version>
+	  <Version>1.1.3</Version>
 	  <Authors>Thomas Mathieson</Authors>
 	  <Description>An ultra-fast CSV parser.</Description>
 	  <Copyright>Copyright Thomas Mathieson 2024</Copyright>
