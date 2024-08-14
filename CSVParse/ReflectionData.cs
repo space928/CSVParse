@@ -552,7 +552,13 @@ internal struct ReflectionData<T> where T : new()
         else if (simpleType == typeof(PreAllocatedString))
         {
             var getterResolved = MakeGetter<PreAllocatedString>(prop);
-            return (ref T t, ReadOnlySpan<char> str) => getterResolved(ref t).Update(str);
+            var setterResolved = MakeSetter<PreAllocatedString>(prop);
+            return (ref T t, ReadOnlySpan<char> str) =>
+            {
+                var s = getterResolved(ref t);
+                s.Update(str);
+                setterResolved(ref t, s);
+            };
         }
         else if (simpleType.GetConstructor([typeof(ReadOnlySpan<char>)]) is ConstructorInfo ctor)
         {
@@ -650,7 +656,13 @@ internal struct ReflectionData<T> where T : new()
         else if (simpleType == typeof(PreAllocatedString))
         {
             var getterResolved = MakeGetter<PreAllocatedString>(field);
-            return (ref T t, ReadOnlySpan<char> str) => getterResolved(ref t).Update(str);
+            var setterResolved = MakeSetter<PreAllocatedString>(field);
+            return (ref T t, ReadOnlySpan<char> str) =>
+            {
+                var s = getterResolved(ref t);
+                s.Update(str);
+                setterResolved(ref t, s);
+            };
         }
         else if (simpleType.GetConstructor([typeof(ReadOnlySpan<char>)]) is ConstructorInfo ctor)
         {
