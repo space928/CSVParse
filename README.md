@@ -20,6 +20,7 @@ the key goals of being fast, and having a straight-forward API.
  - Automatic file encoding detection for UTF-8, UTF-16-LE, and UTF-16-BE.
  - Runtime IL generation to optimise deserializing into arbitrary classes/structs with 
    minimal use of reflection.
+ - Multithreading
 
 ### Important Limitations
  - The RFC 4180 specification allows for line breaks inside quoted fields, due to 
@@ -31,7 +32,6 @@ the key goals of being fast, and having a straight-forward API.
    line buffer. This means that lines in the CSV file cannot be longer than the 
    configured maximum for the parser. This limit is configurable and may be lifted 
    in the future.
- - Currently a `CSVParser` instance can only be used from a single thread.
 
 ### Benchmarks
 

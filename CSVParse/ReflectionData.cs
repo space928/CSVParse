@@ -2,6 +2,7 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using csFastFloat;
 
 namespace CSVParse;
 
@@ -36,17 +37,17 @@ internal struct ReflectionData<T> where T : new()
 
     private static bool UseILGeneration => RuntimeFeature.IsDynamicCodeSupported;
 
-    public static ReflectionData<T>? Create(FieldInfo field, int defaultIndex = -1)
+    public static ReflectionData<T>? Create(FieldInfo field, int defaultIndex = -1, bool useFastFloat = false)
     {
-        return Create(null, field, defaultIndex);
+        return Create(null, field, defaultIndex, useFastFloat);
     }
 
-    public static ReflectionData<T>? Create(PropertyInfo prop, int defaultIndex = -1)
+    public static ReflectionData<T>? Create(PropertyInfo prop, int defaultIndex = -1, bool useFastFloat = false)
     {
-        return Create(prop, null, defaultIndex);
+        return Create(prop, null, defaultIndex, useFastFloat);
     }
 
-    public static ReflectionData<T>? Create(PropertyInfo? prop, FieldInfo? field, int defaultIndex)
+    public static ReflectionData<T>? Create(PropertyInfo? prop, FieldInfo? field, int defaultIndex, bool useFastFloat)
     {
         MemberInfo member;
         Type ftype;
@@ -122,7 +123,7 @@ internal struct ReflectionData<T> where T : new()
             else
             {
                 serializeValue = MakeSerializer(prop);
-                deserializeValue = MakeDeserializer(prop);
+                deserializeValue = MakeDeserializer(prop, useFastFloat);
             }
         }
         else if (field != null)
@@ -137,7 +138,7 @@ internal struct ReflectionData<T> where T : new()
             else
             {
                 serializeValue = MakeSerializer(field);
-                deserializeValue = MakeDeserializer(field);
+                deserializeValue = MakeDeserializer(field, useFastFloat);
             }
         }
         else
@@ -465,7 +466,74 @@ internal struct ReflectionData<T> where T : new()
         }
     }
 
-    private static DeserializeValue MakeDeserializer(PropertyInfo prop)
+    private static DeserializeValue MakeSpanParsableDeserializer(PropertyInfo pi, MethodInfo parse)
+    {
+        if (UseILGeneration)
+        {
+            var setter = pi.GetSetMethod() ?? throw new CSVSerializerException($"Property '{pi.Name}' of type {pi.PropertyType.Name} is not supported!");
+            DynamicMethod dynSetter = new($"set_{pi.Name}_{pi.GetHashCode()}", null, [typeof(T).MakeByRefType(), typeof(ReadOnlySpan<char>)], typeof(T), true);
+            var il = dynSetter.GetILGenerator();
+
+            il.Emit(OpCodes.Ldarg_0);
+            if (!typeof(T).IsValueType)
+                il.Emit(OpCodes.Ldind_Ref);
+            il.Emit(OpCodes.Ldarg_1);
+            il.Emit(OpCodes.Ldnull);
+            il.Emit(OpCodes.Call, parse);
+            if (typeof(T).IsValueType)
+                il.Emit(OpCodes.Call, setter);
+            else
+                il.Emit(OpCodes.Callvirt, setter);
+            il.Emit(OpCodes.Ret);
+            return dynSetter.CreateDelegate<DeserializeValue>();
+        }
+        else
+        {
+            // WARNING: This code path is super slow! 
+            return (ref T target, ReadOnlySpan<char> str) =>
+            {
+                if (target != null)
+                {
+                    object box = target;
+                    pi.SetValue(target, parse.Invoke(null, [new string(str), null]));
+                    target = (T)box; // Booo, unboxing...
+                }
+            };
+        }
+    }
+
+    private static DeserializeValue MakeSpanParsableDeserializer(FieldInfo fi, MethodInfo parse)
+    {
+        if (UseILGeneration)
+        {
+            DynamicMethod setter = new($"set_{fi.Name}_{fi.GetHashCode()}", null, [typeof(T).MakeByRefType(), typeof(ReadOnlySpan<char>)], typeof(T)!, true);
+
+            var il = setter.GetILGenerator();
+
+            il.Emit(OpCodes.Ldarg_0);
+            if (!typeof(T).IsValueType)
+                il.Emit(OpCodes.Ldind_Ref);
+            il.Emit(OpCodes.Ldarg_1);
+            il.Emit(OpCodes.Ldnull);
+            il.Emit(OpCodes.Call, parse);
+            //il.Emit(OpCodes.Ldflda);
+            il.Emit(OpCodes.Stfld, fi);
+            il.Emit(OpCodes.Ret);
+
+            return setter.CreateDelegate<DeserializeValue>();
+        }
+        else
+        {
+            // WARNING: This code path is super slow! 
+            return (ref T target, ReadOnlySpan<char> str) =>
+            {
+                var tref = __makeref(target);
+                fi.SetValueDirect(tref, parse.Invoke(null, [new string(str), null])!);
+            };
+        }
+    }
+
+    private static DeserializeValue MakeDeserializer(PropertyInfo prop, bool useFastFloat)
     {
         var type = prop.PropertyType;
         if (Nullable.GetUnderlyingType(type) is Type t)
@@ -502,12 +570,18 @@ internal struct ReflectionData<T> where T : new()
         else if (simpleType == typeof(double))
         {
             var setterResolved = MakeSetter<double>(prop);
-            return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, double.Parse(str));
+            if (useFastFloat)
+                return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, FastDoubleParser.ParseDouble(str));
+            else
+                return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, double.Parse(str));
         }
         else if (simpleType == typeof(float))
         {
             var setterResolved = MakeSetter<float>(prop);
-            return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, float.Parse(str));
+            if (useFastFloat)
+                return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, FastFloatParser.ParseFloat(str));
+            else
+                return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, float.Parse(str));
         }
         else if (simpleType == typeof(int))
         {
@@ -560,16 +634,26 @@ internal struct ReflectionData<T> where T : new()
                 setterResolved(ref t, s);
             };
         }
+        bool isSpanParsable = false;
+        try
+        {
+            isSpanParsable = simpleType.IsAssignableTo(typeof(ISpanParsable<>).MakeGenericType(simpleType));
+        }
+        catch { }
+        if (isSpanParsable)
+        {
+            var parse = simpleType.GetMethod("Parse", BindingFlags.Static | BindingFlags.Public, [typeof(ReadOnlySpan<char>), typeof(IFormatProvider)])!;
+            return MakeSpanParsableDeserializer(prop, parse);
+        }
         else if (simpleType.GetConstructor([typeof(ReadOnlySpan<char>)]) is ConstructorInfo ctor)
         {
-            // TODO: Should also support ISpanParsable
             return MakeConstructorDeserializer(prop, ctor);
         }
-        else
-            throw new CSVSerializerException($"Property '{prop.Name}' of type {prop.PropertyType.Name} is not supported!");
+        
+        throw new CSVSerializerException($"Property '{prop.Name}' of type {prop.PropertyType.Name} is not supported!");
     }
 
-    private static DeserializeValue MakeDeserializer(FieldInfo field)
+    private static DeserializeValue MakeDeserializer(FieldInfo field, bool useFastFloat)
     {
         var type = field.FieldType;
         if (Nullable.GetUnderlyingType(type) is Type t)
@@ -605,13 +689,19 @@ internal struct ReflectionData<T> where T : new()
         }
         else if (simpleType == typeof(double))
         {
-            var setter = MakeSetter<double>(field);
-            return (ref T t, ReadOnlySpan<char> str) => setter(ref t, double.Parse(str));
+            var setterResolved = MakeSetter<double>(field);
+            if (useFastFloat)
+                return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, FastDoubleParser.ParseDouble(str));
+            else
+                return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, double.Parse(str));
         }
         else if (simpleType == typeof(float))
         {
-            var setter = MakeSetter<float>(field);
-            return (ref T t, ReadOnlySpan<char> str) => setter(ref t, float.Parse(str));
+            var setterResolved = MakeSetter<float>(field);
+            if (useFastFloat)
+                return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, FastFloatParser.ParseFloat(str));
+            else
+                return (ref T t, ReadOnlySpan<char> str) => setterResolved(ref t, float.Parse(str));
         }
         else if (simpleType == typeof(int))
         {
@@ -664,12 +754,23 @@ internal struct ReflectionData<T> where T : new()
                 setterResolved(ref t, s);
             };
         }
+        bool isSpanParsable = false;
+        try
+        {
+            isSpanParsable = simpleType.IsAssignableTo(typeof(ISpanParsable<>).MakeGenericType(simpleType));
+        }
+        catch { }
+        if (isSpanParsable)
+        {
+            var parse = simpleType.GetMethod("Parse", BindingFlags.Static | BindingFlags.Public, [typeof(ReadOnlySpan<char>), typeof(IFormatProvider)])!;
+            return MakeSpanParsableDeserializer(field, parse);
+        }
         else if (simpleType.GetConstructor([typeof(ReadOnlySpan<char>)]) is ConstructorInfo ctor)
         {
             return MakeConstructorDeserializer(field, ctor);
         }
-        else
-            throw new CSVSerializerException($"Field '{field.Name}' of type {field.FieldType.Name} is not supported!");
+
+        throw new CSVSerializerException($"Field '{field.Name}' of type {field.FieldType.Name} is not supported!");
 
         /*[MethodImpl(MethodImplOptions.AggressiveInlining)]
         static void WriteField<U>(ref T t, nint offset, U val)
@@ -777,9 +878,22 @@ internal struct ReflectionData<T> where T : new()
         {
             return MakeSerializerInternal(field, (PreAllocatedString val, Span<char> dst, out int written) => { bool wrote = val.Span.TryCopyTo(dst); written = wrote ? val.Length : 0; });
         }
+        else if (simpleType.IsAssignableTo(typeof(ISpanFormattable)))
+        {
+            //var parse = simpleType.GetMethod("TryFormat", BindingFlags.Instance | BindingFlags.Public, [typeof(Span<char>), typeof(int), typeof(ReadOnlySpan<char>), typeof(IFormatProvider)])!;
+            //(ISpanFormattable)
+            //return MakeSpanParsableDeserializer(prop, parse);
+            var getter = MakeGetter<ISpanFormattable>(field);
+            return (ref T t, Span<char> dst) =>
+            {
+                var val = getter(ref t);
+                if (val.TryFormat(dst, out int written, "", null)) // TODO: This won't work, no way of specifying a format string
+                    return written;
+                return 0;
+            };
+        }
         else if (simpleType.GetMethod("Serialize", [typeof(Span<char>)]) is MethodInfo serializer && serializer.ReturnType == typeof(int))
         {
-            // TODO should also support ISpanFormatable
             //throw new NotImplementedException();
             //var f = serializer.CreateDelegate<SerializeFunc>();
             // TODO: Implement IL generation for fast path...
@@ -876,6 +990,20 @@ internal struct ReflectionData<T> where T : new()
         else if (simpleType == typeof(PreAllocatedString))
         {
             return MakeSerializerInternal(field, (PreAllocatedString val, Span<char> dst, out int written) => { bool wrote = val.Span.TryCopyTo(dst); written = wrote ? val.Length : 0; });
+        }
+        else if (simpleType.IsAssignableTo(typeof(ISpanFormattable)))
+        {
+            //var parse = simpleType.GetMethod("TryFormat", BindingFlags.Instance | BindingFlags.Public, [typeof(Span<char>), typeof(int), typeof(ReadOnlySpan<char>), typeof(IFormatProvider)])!;
+            //(ISpanFormattable)
+            //return MakeSpanParsableDeserializer(prop, parse);
+            var getter = MakeGetter<ISpanFormattable>(field);
+            return (ref T t, Span<char> dst) =>
+            {
+                var val = getter(ref t);
+                if (val.TryFormat(dst, out int written, "", null)) // TODO: This won't work, no way of specifying a format string
+                    return written;
+                return 0;
+            };
         }
         else if (simpleType.GetMethod("Serialize", [typeof(Span<char>)]) is MethodInfo serializer && serializer.ReturnType == typeof(int))
         {

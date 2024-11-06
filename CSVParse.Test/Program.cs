@@ -16,18 +16,99 @@ internal class Program
         string path = @"C:\Users\Thoma\Downloads\stop_times.txt";
         string pathq = @"C:\Users\Thoma\Downloads\stop_times_q.txt";
 
+        Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
+
         if (!File.Exists(path))
         {
             TestDataGenerator.GenerateTestData(path, 20_000_000, false);
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
+        }
+
+        if (!File.Exists(pathq))
+        {
             TestDataGenerator.GenerateTestData(pathq, 20_000_000, true);
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
         }
 
         //TestCSVParse<Test>();
         //TestCSVParser();
-        TestLargeFile(path, pathq);
+        //TestLargeFile(path, pathq);
+        TestMT(pathq);
         Console.WriteLine("DONE!");
         Console.ReadLine();
+    }
+
+    private static void TestMT(string pathq)
+    {
+        var options = new CSVSerializerOptions()
+        {
+            IncludeFields = true,
+            IncludeProperties = true,
+            IncludePrivate = false,
+            HandleSpeechMarks = false,
+            Separator = ',',
+            UseFastFloat = false,
+        };
+        var options2 = new CSVSerializerOptions(options)
+        {
+            HandleSpeechMarks = true
+        };
+        var options3 = new CSVSerializerOptions(options2)
+        {
+            Multithreaded = true,
+            UseFastFloat = true,
+        };
+        var parserNoCusSer = new CSVParser<GTFSStopTimeStructNoCustomSer>(options);
+        var parserNoAllocQuote = new CSVParser<GTFSStopTimeStructFast>(options2);
+        var parserThreaded = new CSVParser<GTFSStopTimeStructNoCustomSer>(options3);
+        var parserThreadedNoAlloc = new CSVParser<GTFSStopTimeStructFast>(options3);
+
+        int rowsToParse = 5_000_000;
+
+        //using MemoryStream ms = new(File.ReadAllBytes(pathq));
+
+        {
+            Stopwatch sw = new();
+            sw.Start();
+            var csv = new GTFSStopTimeStructFast(1024);
+            var dst = new GTFSStopTimeStructFast[rowsToParse];
+            for (int i = 0; i < rowsToParse; i++)
+                dst[i] = csv;
+            sw.Stop();
+            Console.WriteLine($"New (threaded)! Allocated {rowsToParse} records in {sw.Elapsed}!");
+
+            sw.Restart();
+            //using var ms = new MemoryStream(File.ReadAllBytes(path));
+            using FileStream fs = File.OpenRead(pathq);
+
+            var header = parserThreadedNoAlloc.Initialise(fs);
+            
+            parserThreadedNoAlloc.Parse(ref header, fs, dst, 0);
+            sw.Stop();
+            Console.WriteLine($"New (threaded)! Loaded {rowsToParse} records in {sw.Elapsed}!");
+        }
+        //ms.Position = 0;
+
+        {
+            Stopwatch sw = new();
+            sw.Start();
+            var csv = new GTFSStopTimeStructFast(1024);
+            var dst = new GTFSStopTimeStructFast[rowsToParse];
+            for (int i = 0; i < rowsToParse; i++)
+                dst[i] = csv;
+            sw.Stop();
+            Console.WriteLine($"New (single)! Allocated {rowsToParse} records in {sw.Elapsed}!");
+
+            sw.Restart();
+            //using var ms = new MemoryStream(File.ReadAllBytes(path));
+            using FileStream fs = File.OpenRead(pathq);
+
+            var header = parserNoAllocQuote.Initialise(fs);
+
+            parserNoAllocQuote.Parse(ref header, fs, dst, 0);
+            sw.Stop();
+            Console.WriteLine($"New (single)! Loaded {rowsToParse} records in {sw.Elapsed}!");
+        }
     }
 
     private static void TestLargeFile(string path, string pathq)
@@ -38,19 +119,27 @@ internal class Program
             IncludeProperties = true,
             IncludePrivate = false,
             HandleSpeechMarks = false,
-            Separator = ','
+            Separator = ',',
+            UseFastFloat = false,
         };
         var options2 = new CSVSerializerOptions(options)
         {
             HandleSpeechMarks = true
         };
+        var options3 = new CSVSerializerOptions(options2)
+        {
+            Multithreaded = true,
+            UseFastFloat = true
+        };
         var parser = new CSVParser<GTFSStopTimeStruct>(options);
         var parserNoCusSer = new CSVParser<GTFSStopTimeStructNoCustomSer>(options);
         var parserNoAlloc = new CSVParser<GTFSStopTimeStructFast>(options);
         var parserNoAllocQuote = new CSVParser<GTFSStopTimeStructFast>(options2);
+        var parserThreaded = new CSVParser<GTFSStopTimeStructNoCustomSer>(options3);
+        var parserThreadedNoAlloc = new CSVParser<GTFSStopTimeStructFast>(options3);
         var parserOld = new CSVParserOld<GTFSStopTimeStruct>(options);
 
-        int rowsToParse = 1_000_0000;
+        int rowsToParse = 1_000_000;
 
 #if false
         {
@@ -99,10 +188,14 @@ internal class Program
         // Warmup
         {
             using FileStream fs = File.OpenRead(path);
-            var csv = parser.Parse(fs).Take(rowsToParse).ToList();
+            var csv = parser.Parse(fs).Take(rowsToParse/4).ToList();
             fs.Position = 0;
-            var csv1 = parserOld.Parse(fs).Take(rowsToParse).ToList();
-            Console.WriteLine($"Warmup! Loaded {csv.Count} and {csv1.Count} records!");
+            var csv1 = parserOld.Parse(fs).Take(rowsToParse/4).ToList();
+            fs.Position = 0;
+            var csv2 = parserThreaded.Parse(fs).Take(rowsToParse/4).ToList();
+            fs.Position = 0;
+            var csv3 = parserThreadedNoAlloc.Parse(fs).Take(rowsToParse/4).ToList();
+            Console.WriteLine($"Warmup! Loaded {csv.Count} and {csv1.Count} and {csv2.Count} and {csv3.Count} records!");
 
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Aggressive, true, true);
             GC.WaitForPendingFinalizers();
@@ -120,6 +213,46 @@ internal class Program
                 parserNoAllocQuote.ParseRow(ref header, fs, ref csv);
             sw.Stop();
             Console.WriteLine($"New (No alloc quote)! Loaded {rowsToParse} records in {sw.Elapsed}!");
+        }
+
+        Thread.Sleep(1500);
+
+        {
+            Stopwatch sw = new();
+            sw.Start();
+            var dst = new GTFSStopTimeStructNoCustomSer[rowsToParse];
+            //for (int i = 0; i < rowsToParse; i++)
+            //    dst[i] = new GTFSStopTimeStructNoCustomSer();
+            sw.Stop();
+            Console.WriteLine($"New (threaded)! Allocated {rowsToParse} records in {sw.Elapsed}!");
+
+            sw.Restart();
+            //using var ms = new MemoryStream(File.ReadAllBytes(path));
+            using FileStream fs = File.OpenRead(pathq);
+
+            var header = parserThreaded.Initialise(fs);
+            var csv = new GTFSStopTimeStructFast(1024);
+            parserThreaded.Parse(ref header, fs, dst, 0);
+            sw.Stop();
+            Console.WriteLine($"New (threaded)! Loaded {rowsToParse} records in {sw.Elapsed}!");
+        }
+
+        Thread.Sleep(1500);
+
+        {
+            Stopwatch sw = new();
+            sw.Start();
+
+            //using var ms = new MemoryStream(File.ReadAllBytes(path));
+            using FileStream fs = File.OpenRead(pathq);
+
+            //var header = parserThreaded.Initialise(fs);
+            var csv = new GTFSStopTimeStructFast(1024);
+            float f = 0;
+            foreach (var item in parserThreadedNoAlloc.Parse(fs).Take(rowsToParse))
+                f += item.ShapeDistTraveled!.Value;
+            sw.Stop();
+            Console.WriteLine($"New (threaded, iterator)! Loaded {rowsToParse} records in {sw.Elapsed}!");
         }
 
         Thread.Sleep(1500);

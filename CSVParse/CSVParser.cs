@@ -1,12 +1,12 @@
 ﻿using System;
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Reflection;
-using System.Reflection.Metadata;
-using System.Runtime.InteropServices;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -68,6 +68,14 @@ public class CSVSerializerOptions
     /// The default text encoding to use when decoding the file. If left as <c>null</c>, this will be detected automatically.
     /// </summary>
     public Encoding? DefaultEncoding { get; init; } = null;
+    /// <summary>
+    /// Whether to use multithreading to parse the CSV file.
+    /// </summary>
+    public bool Multithreaded { get; init; } = false;
+    /// <summary>
+    /// Whether to use the FastFloat algorithm provided by https://github.com/CarlVerret/csFastFloat to parse floating point numbers.
+    /// </summary>
+    public bool UseFastFloat { get; init; } = true;
 
     public static readonly CSVSerializerOptions Default = new();
 
@@ -83,6 +91,8 @@ public class CSVSerializerOptions
         MaximumLineSize = other.MaximumLineSize;
         HeaderMode = other.HeaderMode;
         DefaultEncoding = other.DefaultEncoding;
+        Multithreaded = other.Multithreaded;
+        UseFastFloat = other.UseFastFloat;
     }
 }
 
@@ -141,57 +151,6 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
     }
 
     /// <summary>
-    /// Parses a CSV file into an IEnumerable of rows.
-    /// </summary>
-    /// <typeparam name="T">The row data structure to deserialize into.</typeparam>
-    /// <param name="stream">The binary stream to read from.</param>
-    /// <param name="leaveOpen">Whether the stream should be left open after parsing has finished.</param>
-    /// <returns>An enumerable of rows, parsed as they are iterated through.</returns>
-    public IEnumerable<T> Parse(Stream stream, bool leaveOpen = true)
-    {
-        try
-        {
-            Init(options.DefaultEncoding);
-
-            //Span<char> line = stackalloc char[2048];
-            var fields = typeInfo;
-            int lineNo = 0;
-            char sep = options.Separator;
-            bool handleSpeechMarks = options.HandleSpeechMarks;
-            var parseHeader = options.HeaderMode;
-            if (parseHeader == CSVHeaderMode.Parse)
-            {
-                int headerLen = ReadLine(stream, line);
-                if (headerLen == 0)
-                    yield break;
-                fields = ReadHeader(line.AsSpan()[..headerLen]);
-                lineNo++;
-            }
-            else if (parseHeader == CSVHeaderMode.Skip)
-            {
-                ReadLine(stream, line);
-                lineNo++;
-            }
-
-            int len = 0;
-            while ((len = ReadLine(stream, line)) != -1)
-            {
-                if (len == 0)
-                    continue;
-                T ret = new T();
-                ReadRow(ref ret, line.AsSpan()[..len], lineUnescaped, sep, handleSpeechMarks, fields, lineNo);
-                yield return ret;
-                lineNo++;
-            }
-        }
-        finally
-        {
-            if (!leaveOpen)
-                stream.Dispose();
-        }
-    }
-
-    /// <summary>
     /// Resets the internal state of the parser, and if enabled, reads the header row of given CSV stream.
     /// </summary>
     /// <param name="stream">A binary stream containing the CSV file to be parsed.</param>
@@ -220,7 +179,74 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
             lineNo++;
         }
 
-        return new HeaderData<T>(fields, sep, handleSpeechMarks, lineNo);
+        RowWorker[]? rowWorkers = null;
+        CircularBuffer<WorkItem>? workQueue = null;
+        ConcurrentBag<char[]>? lineBuffers = null;
+        if (options.Multithreaded)
+        {
+            // Create the work queue and preallocate char buffers in each of it's slots to be reused later.
+            workQueue = new(128);
+            /*for (int i = 0; i < workQueue.Capacity; i++)
+                workQueue.Enqueue(new(new char[options.MaximumLineSize]));
+            for (int i = 0; i < workQueue.Capacity; i++)
+                workQueue.Dequeue();*/
+            lineBuffers = new(Enumerable.Range(0, workQueue.Capacity + 8).Select(x => new char[options.MaximumLineSize]));
+
+            rowWorkers = new RowWorker[Environment.ProcessorCount - 1];
+            for (int i = 0; i < rowWorkers.Length; i++)
+                rowWorkers[i] = new RowWorker(options, fields, workQueue, lineBuffers);
+        }
+
+        var headerData = new HeaderData<T>(fields, sep, handleSpeechMarks, lineNo, rowWorkers, workQueue, lineBuffers);
+
+        return headerData;
+    }
+
+    /// <summary>
+    /// Parses a CSV file into an IEnumerable of rows.
+    /// </summary>
+    /// <typeparam name="T">The row data structure to deserialize into.</typeparam>
+    /// <param name="stream">The binary stream to read from.</param>
+    /// <param name="leaveOpen">Whether the stream should be left open after parsing has finished.</param>
+    /// <returns>An enumerable of rows, parsed as they are iterated through.</returns>
+    public IEnumerable<T> Parse(Stream stream, bool leaveOpen = true)
+    {
+        try
+        {
+            var header = Initialise(stream);
+
+            if (options.Multithreaded)
+                return ParseBodyThreaded(stream, header);
+            else
+                return ParseBodySimple(stream, header.typeInfo, header.lineNo);
+        }
+        finally
+        {
+            if (!leaveOpen)
+                stream.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Parses a CSV file into an array of items.
+    /// </summary>
+    /// <param name="headerData">The header data returned by the last call to the <see cref="Initialise(Stream)"/> method.</param>
+    /// <param name="stream">The binary stream to read from.</param>
+    /// <param name="destination">The array to parse rows into.</param>
+    /// <param name="index">The starting index of the array.</param>
+    /// <returns><c>true</c> if there are more rows to parse </returns>
+    public bool Parse(ref HeaderData<T> headerData, Stream stream, T[] destination, int index)
+    {
+        if (options.Multithreaded)
+            return ParseBodyThreaded(destination, index, stream, ref headerData);
+        else
+        {
+            bool moreToRead = true;
+            for (int i = 0; i < destination.Length; i++)
+                moreToRead = ParseRow(ref headerData, stream, ref destination[i]);
+
+            return moreToRead;
+        }
     }
 
     /// <summary>
@@ -244,6 +270,92 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
             return true;
         }
 
+        return false;
+    }
+
+    private IEnumerable<T> ParseBodySimple(Stream stream, ReflectionData<T>?[] fields, int lineNo)
+    {
+        char sep = options.Separator;
+        bool handleSpeechMarks = options.HandleSpeechMarks;
+        int len;
+        while ((len = ReadLine(stream, line)) != -1)
+        {
+            if (len == 0)
+                continue;
+            T ret = new T();
+            ReadRow(ref ret, line.AsSpan()[..len], lineUnescaped, sep, handleSpeechMarks, fields, lineNo);
+            yield return ret;
+            lineNo++;
+        }
+    }
+
+    private IEnumerable<T> ParseBodyThreaded(Stream stream, HeaderData<T> header)
+    {
+        T[] retBuff = new T[64];
+        //if (RuntimeHelpers.IsReferenceOrContainsReferences<T>())
+        for (int i = 0; i < retBuff.Length; i++)
+            retBuff[i] = new T();
+
+        while (true)
+        {
+            bool remaining = ParseBodyThreaded(retBuff, 0, stream, ref header);
+            for (int i = 0; i < retBuff.Length; i++)
+                yield return retBuff[i];
+
+            if (!remaining)
+                break;
+        }
+    }
+
+    private bool ParseBodyThreaded(T[] destination, int index, Stream stream, ref HeaderData<T> header)
+    {
+        var rowWorkers = header.rowWorkers!;
+        var workQueue = header.workQueue!;
+        int lineNo = header.lineNo;
+        int lineNoStart = lineNo;
+        //int linesParsed = 0;
+        for (int i = 0; i < rowWorkers.Length; i++)
+        {
+            rowWorkers[i].destination = destination;
+            rowWorkers[i].Start();
+            /*rowWorkers[i].onComplete = _ =>
+            {
+                Interlocked.Increment(ref linesParsed);
+            };*/
+        }
+
+        int len;
+        do
+        {
+            char[]? lineBuff;
+            while (!header.charBuffers!.TryTake(out lineBuff))
+                Thread.Yield();
+            
+            len = ReadLine(stream, lineBuff);
+
+            WorkItem work = new(lineBuff, len, lineNo, lineNo - lineNoStart + index);
+            workQueue.Add(work);
+
+            lineNo++;
+            // No more space in the output buffer, wait for results and return
+            int linesRead = lineNo - lineNoStart;
+            if (linesRead + index >= destination.Length)
+            {
+                for (int i = 0; i < rowWorkers.Length; i++)
+                    rowWorkers[i].Stop();
+
+                header.lineNo = lineNo;
+                header.lineNoStart = lineNo;
+                return true;
+            }
+        } while (len != -1);
+
+        // No more lines to parse, wait for results, and dispose of threads
+        foreach (var worker in rowWorkers)
+            worker.Dispose();
+
+        header.lineNo = lineNo;
+        header.lineNoStart = lineNo;
         return false;
     }
 
@@ -299,6 +411,11 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
     {
         List<ReflectionData<T>?> res = [];
         int start = 0;
+
+        // Check for a UTF BOM and skip it...
+        if (header.Length > 0 && header[0] == '\uFEFF')
+            start++;
+
         char sep = options.Separator;
         while (true)
         {
@@ -398,6 +515,7 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
                         item[..pos].CopyTo(unesc[unescLen..]);
                         unescLen += pos;
                         end += unescLen;
+                        break;
                     }
                 }
 
@@ -466,6 +584,100 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
         //return ret;
     }
 
+    #region Multithreading
+    internal struct WorkItem(char[]? line, int lineLen, int lineNo, int destInd)
+    {
+        // TODO: it might make sense if a single work item contained multiple lines?
+        public char[]? line = line;
+        public int lineLen = lineLen;
+        public int lineNo = lineNo;
+        public int destInd = destInd;
+
+        public WorkItem(char[]? line) : this(line, 0, 0, 0)
+        {
+            
+        }
+    }
+
+    internal class RowWorker : IDisposable
+    {
+        public T[] destination;
+        public Action<int>? onComplete;
+
+        private volatile bool terminate;
+
+        private readonly Thread workThread;
+        private readonly char[] lineUnescaped;
+        private readonly char sep;
+        private readonly bool handleSpeechMarks;
+        private readonly ReflectionData<T>?[] fields;
+        private readonly CircularBuffer<WorkItem> workQueue;
+        private readonly ConcurrentBag<char[]> lineBuffers;
+
+        public RowWorker(CSVSerializerOptions options, ReflectionData<T>?[] fields, 
+            CircularBuffer<WorkItem> workQueue, ConcurrentBag<char[]> lineBuffers, 
+            Action<int>? onComplete = null)
+        {
+            lineUnescaped = new char[options.MaximumLineSize];
+            sep = options.Separator;
+            handleSpeechMarks = options.HandleSpeechMarks;
+            this.fields = fields;
+            this.destination = [];
+            this.workQueue = workQueue;
+            this.lineBuffers = lineBuffers;
+            this.onComplete = onComplete;
+
+            workThread = new(Work);
+            //workThread.Start();
+        }
+
+        public void Start()
+        {
+            terminate = false;
+            if (workThread.ThreadState != ThreadState.Running)
+                workThread.Start();
+        }
+
+        public void Stop()
+        {
+            terminate = true;
+            workThread.Join();
+        }
+
+        private void Work()
+        {
+            SpinWait spinner = default;
+            while (!terminate)
+            {
+                WorkItem work;
+                while (!workQueue.TryDequeue(out work) && !terminate)
+                    //Thread.SpinWait(1);
+                    spinner.SpinOnce(-1);
+                spinner.Reset();
+
+                if (work.lineLen == 0)
+                    continue;
+
+                //T ret = new T();
+                ref var ret = ref destination[work.destInd];
+                ReadRow(ref ret, work.line.AsSpan()[..work.lineLen], lineUnescaped, sep, handleSpeechMarks, fields, work.lineNo);
+
+                //Volatile.Write(ref Unsafe.As<char, ushort>(ref work.line![0]), 0);
+                // Return the char buffer to the pool of free buffers
+                lineBuffers.Add(work.line!);
+
+                onComplete?.Invoke(work.lineNo);
+            }
+        }
+
+        public void Dispose()
+        {
+            Stop();
+        }
+    }
+    #endregion
+
+    #region Line Reader
     private enum LineEnding
     {
         None,
@@ -703,6 +915,7 @@ public class CSVParser<[DynamicallyAccessedMembers(DynamicallyAccessedMemberType
         detectedEncoding = true;
         return preamble;
     }
+    #endregion
 }
 
 /// <summary>

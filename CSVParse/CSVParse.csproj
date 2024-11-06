@@ -10,7 +10,7 @@
 	  <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
 	  <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 	  <Title>CSV Parse</Title>
-	  <Version>1.1.5</Version>
+	  <Version>1.2.2</Version>
 	  <Authors>Thomas Mathieson</Authors>
 	  <Description>An ultra-fast CSV parser.</Description>
 	  <Copyright>Copyright Thomas Mathieson 2024</Copyright>
@@ -30,6 +30,10 @@
       <Pack>True</Pack>
       <PackagePath>\</PackagePath>
     </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="csFastFloat" Version="4.1.4" />
   </ItemGroup>
 
 </Project>

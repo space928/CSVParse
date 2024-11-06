@@ -1,10 +1,13 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using System;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 
 namespace CSVParse;
 
 /// <summary>
 /// Represents a string which uses pre-allocated memory.
 /// </summary>
+[DebuggerDisplay("{Span}")]
 public struct PreAllocatedString
 {
     readonly internal char[] _array;
@@ -60,6 +63,26 @@ public struct PreAllocatedString
     public static bool operator !=(PreAllocatedString left, PreAllocatedString right)
     {
         return !(left == right);
+    }
+
+    public static bool operator ==(PreAllocatedString left, string right)
+    {
+        return left.Span.SequenceEqual(right);
+    }
+
+    public static bool operator !=(PreAllocatedString left, string right)
+    {
+        return !left.Span.SequenceEqual(right);
+    }
+
+    public static bool operator ==(PreAllocatedString left, ReadOnlySpan<char> right)
+    {
+        return left.Span.SequenceEqual(right);
+    }
+
+    public static bool operator !=(PreAllocatedString left, ReadOnlySpan<char> right)
+    {
+        return !left.Span.SequenceEqual(right);
     }
 
     public override readonly int GetHashCode()

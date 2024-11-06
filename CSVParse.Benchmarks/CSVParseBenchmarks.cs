@@ -6,6 +6,7 @@ using CommandLine;
 using CsvHelper;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -29,6 +30,7 @@ public class CSVParseBenchmarks
     private readonly CSVParser<GTFSStopTimeStruct> parserStruct;
     private readonly CSVParser<GTFSStopTimeStructNoCustomSer> parserStructNoCustomSer;
     private readonly CSVParser<GTFSStopTimeStructFast> parserStructNoAlloc;
+    private readonly CSVParser<GTFSStopTimeStructFast> parserStructThreaded;
     private readonly CSVParserOld<GTFSStopTime> parserOldClass;
     private readonly CSVParserOld<GTFSStopTimeStruct> parserOldStruct;
 
@@ -42,14 +44,26 @@ public class CSVParseBenchmarks
             HandleSpeechMarks = false,
             Separator = ','
         };
+        var optionsThreaded = new CSVSerializerOptions()
+        {
+            IncludeFields = true,
+            IncludeProperties = true,
+            IncludePrivate = false,
+            HandleSpeechMarks = false,
+            Separator = ',',
+            Multithreaded = true
+        };
 
         parserClass = new(options);
         parserStruct = new(options);
         parserStructNoCustomSer = new(options);
         parserStructNoAlloc = new(options);
+        parserStructThreaded = new(optionsThreaded);
         parserOldClass = new(options);
         parserOldStruct = new(options);
         //parserCsvHelper = new();
+
+        //Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.AboveNormal;
     }
 
     [GlobalSetup]
@@ -134,6 +148,25 @@ public class CSVParseBenchmarks
                 tmp += csv.DepartureTime.time;
             }*/
         }
+
+        //Console.WriteLine($"Loaded {csv.Count} records!");
+    }
+
+    [Benchmark]
+    public void TestCSVParseStructThreaded()
+    {
+        if (memoryStream == null)
+            return;
+        memoryStream.Position = 0;
+
+        var csv = new GTFSStopTimeStructFast(1024);
+        var it = parserStructThreaded.Parse(memoryStream).GetEnumerator();
+        //int tmp = 0;
+        /*for (int i = 0; i < RowsToParse; i++)
+        {
+            it.MoveNext();
+            it.Current
+        }*/
 
         //Console.WriteLine($"Loaded {csv.Count} records!");
     }
